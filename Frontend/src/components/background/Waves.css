@@ -1,0 +1,13 @@
+.animated-waves {
+    background: linear-gradient(130deg, #000784 0%, #032467 100%);
+    background-size: 400% 400%;
+    animation: waveBG 15s ease infinite;
+    opacity: 0.3;
+  }
+  
+  @keyframes waveBG {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  
