@@ -15,6 +15,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000/api/nlp/network-command/';
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -23,18 +24,7 @@ export default function ChatPage() {
   const formatTime = (date: Date) =>
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  const getBotResponse = (input: string): string => {
-    const lower = input.toLowerCase();
-    if (lower.includes('vlan')) {
-      return `VLANs:\n10 - Admin\n20 - Users\n30 - Servers`;
-    }
-    if (lower.includes('status')) {
-      return `Device Uptime: 5d 3h\nCPU: 24%\nMemory: 38%`;
-    }
-    return "Try asking: 'Show VLANs' or 'Status of switch-01'";
-  };
-
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
     if (!trimmed) return;
@@ -46,20 +36,44 @@ export default function ChatPage() {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
 
-    setTimeout(() => {
+    try {
+      const res = await fetch(BACKEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_ip: '192.168.10.1', query: trimmed })
+      });
+
+      let botText = '';
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        botText = `Error: ${err.error || res.status}`;
+      } else {
+        const data = await res.json();
+        botText = data.output || data.warning || JSON.stringify(data, null, 2);
+      }
+
       const botMessage: ChatMessage = {
         id: Date.now().toString(),
         sender: 'bot',
-        content: getBotResponse(trimmed),
+        content: botText,
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, botMessage]);
+      setMessages(prev => [...prev, botMessage]);
+    } catch (err: any) {
+      const botMessage: ChatMessage = {
+        id: Date.now().toString(),
+        sender: 'bot',
+        content: `Request failed: ${err.message}`,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, botMessage]);
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (

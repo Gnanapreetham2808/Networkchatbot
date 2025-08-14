@@ -13,7 +13,7 @@ SECRET_KEY = 'django-insecure-vod$fi329&a4@8gur3yu!@x6hfaw379l7e&nl510q17=c$r0ri
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 # Application definition
 INSTALLED_APPS = [
@@ -103,7 +103,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ✅ CORS Settings to allow Next.js frontend
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # Next.js dev server
+    "http://localhost:3000",
 ]
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_HEADERS = [
+    'accept', 'accept-encoding', 'authorization', 'content-type', 'dnt', 'origin',
+    'user-agent', 'x-csrftoken', 'x-requested-with'
+]
+CORS_EXPOSE_HEADERS = ['content-type']
+CORS_PREFLIGHT_MAX_AGE = 86400
 
 CORS_ALLOW_CREDENTIALS = True
