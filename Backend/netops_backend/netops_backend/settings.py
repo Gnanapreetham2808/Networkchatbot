@@ -114,3 +114,13 @@ CORS_EXPOSE_HEADERS = ['content-type']
 CORS_PREFLIGHT_MAX_AGE = 86400
 
 CORS_ALLOW_CREDENTIALS = True
+
+# DRF Auth & Permissions (Firebase)
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'chatbot.auth.FirebaseAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'chatbot.auth.IsAdminOrChatUser',
+    ],
+}

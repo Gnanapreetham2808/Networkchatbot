@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/components/AuthProvider';
 import { FiSend, FiUser, FiCpu } from 'react-icons/fi';
 
 type ChatMessage = {
@@ -11,6 +13,8 @@ type ChatMessage = {
 };
 
 export default function ChatPage() {
+  const router = useRouter();
+  const { user, loading, idToken } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -20,6 +24,12 @@ export default function ChatPage() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/login');
+    }
+  }, [loading, user, router]);
 
   const formatTime = (date: Date) =>
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -41,9 +51,11 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
       const res = await fetch(BACKEND_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ device_ip: '192.168.10.1', query: trimmed })
       });
 
@@ -75,6 +87,10 @@ export default function ChatPage() {
       setIsLoading(false);
     }
   };
+
+  if (loading || (!user && !loading)) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
 
   return (
     <div className="min-h-screen bg-[#f5f7fa] flex items-center justify-center px-4 py-10">

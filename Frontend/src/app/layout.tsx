@@ -2,6 +2,8 @@
 import './globals.css';
 import { ReactNode } from 'react';
 import Link from 'next/link';
+import { AuthProvider } from '@/components/AuthProvider';
+import FirebaseConfigStatus from '@/components/FirebaseConfigStatus';
 
 export const metadata = {
   title: 'Network Chatbot',
@@ -12,6 +14,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="h-screen flex flex-col font-sans bg-gray-50">
+        <AuthProvider>
         {/* Top Navbar */}
         <header className="bg-black text-white p-4 flex items-center justify-between shadow">
           <h2 className="text-xl font-bold">Admin Panel</h2>
@@ -27,8 +30,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
         {/* Page Content */}
         <main className="flex-1 overflow-y-auto p-6">
+          <FirebaseConfigStatus />
           {children}
         </main>
+  </AuthProvider>
       </body>
     </html>
   );

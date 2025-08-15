@@ -1,11 +1,26 @@
-# chatbot/nlp_engine/map_command.py
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+"""Command mapping with rule base + optional model (lazy loaded)."""
+
 from .config import MODEL_MAP, MAP_MIN_SCORE
 import re
-from functools import lru_cache
 
-tok_map = AutoTokenizer.from_pretrained(MODEL_MAP)
-mod_map = AutoModelForSeq2SeqLM.from_pretrained(MODEL_MAP)
+_TOK = None
+_MODEL = None  # False if unavailable
+
+
+def _load_model():
+    global _TOK, _MODEL
+    if _MODEL is not None:
+        return _TOK, (_MODEL if _MODEL is not False else None)
+    try:
+        from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+        _TOK = AutoTokenizer.from_pretrained(MODEL_MAP)
+        _MODEL = AutoModelForSeq2SeqLM.from_pretrained(MODEL_MAP)
+        print(f"[map_command] Loaded mapping model: {MODEL_MAP}")
+    except Exception as e:
+        print("[map_command] Mapping model unavailable:", e)
+        _MODEL = False
+        return None, None
+    return _TOK, _MODEL
 
 # Simple rule base for frequent read-only queries
 RULE_SHOW_MAP = [
@@ -84,10 +99,23 @@ def map_to_cli(text):
             }
 
     # 3. Model-based fallback
-    prompt = f"Convert the user's request into a single network CLI command. Output ONLY the command.\n{text}\nCommand:" 
-    x = tok_map(prompt, return_tensors="pt")
-    y = mod_map.generate(**x, max_new_tokens=18, num_beams=4, early_stopping=True)
-    raw_out = tok_map.decode(y[0], skip_special_tokens=True).strip()
+    tok, model = _load_model()
+    raw_out = ""
+    if tok and model:
+        try:
+            prompt = f"Convert the user's request into a single network CLI command. Output ONLY the command.\n{text}\nCommand:"
+            x = tok(prompt, return_tensors="pt")
+            y = model.generate(**x, max_new_tokens=18, num_beams=4, early_stopping=True)
+            raw_out = tok.decode(y[0], skip_special_tokens=True).strip()
+        except Exception as e:
+            print("[map_command] Inference failed, fallback to heuristic:", e)
+            raw_out = original
+    else:
+        # Heuristic fallback: just return original if it starts with known verbs, else prepend 'show'
+        if lower.startswith(('show ', 'ping ', 'traceroute ')):
+            raw_out = original
+        else:
+            raw_out = f"show {original}".strip()
     sanitized = _sanitize_generated(raw_out)
     if not sanitized and lower.startswith(('show ', 'ping ', 'traceroute ')):
         sanitized = original
