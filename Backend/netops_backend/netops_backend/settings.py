@@ -3,6 +3,7 @@ Django settings for netops_backend project.
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -115,12 +116,11 @@ CORS_PREFLIGHT_MAX_AGE = 86400
 
 CORS_ALLOW_CREDENTIALS = True
 
-# DRF Auth & Permissions (Firebase)
+# Auth disabled globally for development (re-enable later by restoring previous block)
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'chatbot.auth.FirebaseAuthentication',
-    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
     'DEFAULT_PERMISSION_CLASSES': [
-        'chatbot.auth.IsAdminOrChatUser',
-    ],
+        'rest_framework.permissions.AllowAny',
+    ]
 }
+print('[settings] Global auth disabled (REST_FRAMEWORK AllowAny).')

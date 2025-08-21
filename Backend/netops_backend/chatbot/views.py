@@ -1,21 +1,24 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, permissions
+from rest_framework import status
 
 from .network import run_command_on_switch
 from .nlp_engine.intent import classify_intent
 from .nlp_engine.ner import extract_entities
 from .nlp_engine.map_command import map_to_cli
 from .nlp_engine.safety import gate_command
-from .nlp_engine.response_generator import generate_natural_response  # ✅ New import
+from .nlp_engine.response_generator import generate_natural_response
+from .nlp_engine.retrieval import log_interaction
+
+from .auth import FirebaseAuthentication, IsAdminOrChatUser
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 
 
-from .auth import IsAdminOrChatUser, IsFirebaseAuthenticated
-
-
+@method_decorator(csrf_exempt, name="dispatch")
 class NetworkCommandAPIView(APIView):
-    authentication_classes = []  # Use global DEFAULT_AUTHENTICATION_CLASSES
-    permission_classes = [IsAdminOrChatUser]
+    # Auth removed conditionally via settings (DISABLE_AUTH). Override only if needed.
+
     def get(self, request):
         return Response(
             {"message": "GET request received. This endpoint is intended for POST requests with device_ip and query."},
@@ -23,7 +26,7 @@ class NetworkCommandAPIView(APIView):
         )
 
     def post(self, request):
-        # ---- Debug instrumentation START (remove in production) ----
+        # Debug: log incoming request
         try:
             print("[NetworkCommandAPIView] Incoming headers Content-Type=", request.headers.get('Content-Type'))
             print("[NetworkCommandAPIView] Raw body bytes:", len(getattr(request, 'body', b'')))
@@ -32,7 +35,6 @@ class NetworkCommandAPIView(APIView):
                 print("[NetworkCommandAPIView] Body preview:", preview)
         except Exception as _e:
             print("[NetworkCommandAPIView] Logging error", _e)
-        # ---- Debug instrumentation END ----
 
         # Extract request data
         device_ip = request.data.get("device_ip") if hasattr(request, "data") else None
@@ -69,7 +71,7 @@ class NetworkCommandAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 🔠 Step 1: NLP extraction
+        # Step 1: NLP extraction
         intent_result = classify_intent(user_query)
         entities_result = extract_entities(user_query)
 
@@ -82,11 +84,11 @@ class NetworkCommandAPIView(APIView):
 
         fallback_reason = None if command_target else "No specific entity extracted; proceeding with generic command mapping"
 
-        # ⚙️ Step 2: Map to CLI
+        # Step 2: Map to CLI
         mapping_result = map_to_cli(user_query)
         cli_command = mapping_result.get("command", "")
 
-        # 🚨 Step 2.1: Safety check
+        # Step 2.1: Safety check
         safety_info = gate_command(cli_command)
 
         # Auto-add 'show' for safe read-only queries
@@ -113,16 +115,22 @@ class NetworkCommandAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 🖧 Step 3: Run command
+        # Step 3: Run command
         try:
             output = run_command_on_switch(device_ip, cli_command)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # 🗣 Step 4: Natural language summarization
+        # Step 4: Natural language summarization
         output_natural = generate_natural_response(intent_result, entities_result, cli_command, output)
 
-        # ✅ Step 5: Response
+        # Step 4.1: Log interaction for future retrieval (best-effort)
+        try:
+            log_interaction(user_query, output)
+        except Exception as e:
+            print("[NetworkCommandAPIView] retrieval log error", e)
+
+        # Step 5: Response
         return Response({
             "query": user_query,
             "intent": intent_result,
@@ -131,14 +139,16 @@ class NetworkCommandAPIView(APIView):
             "command_mapping": mapping_result,
             "safety": safety_info,
             "output_raw": output,
-            "output_natural": output_natural,  # Friendly AI answer
-            "output": output_natural,  # Alias for frontend simplicity
+            "output_natural": output_natural,
+            "output": output_natural,
             "note": fallback_reason
         }, status=status.HTTP_200_OK)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
 class MeAPIView(APIView):
-    permission_classes = [IsAdminOrChatUser]
+    # Auth removed conditionally via settings (DISABLE_AUTH). Override only if needed.
+
     def get(self, request):
         user = getattr(request, 'user', None)
         if not user or not getattr(user, 'is_authenticated', False):

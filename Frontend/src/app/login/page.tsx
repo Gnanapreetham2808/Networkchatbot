@@ -13,7 +13,7 @@ export default function LoginPage() {
   const [isRegister, setIsRegister] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const { signIn, signUp, user } = useAuth();
+  const { signIn, signUp, user, isAdmin } = useAuth();
   const router = useRouter();
 
   async function handleSubmit(e: React.FormEvent) {
@@ -26,7 +26,12 @@ export default function LoginPage() {
       } else {
         await signIn(email, password);
       }
-      router.push('/chat');
+      // Post-login routing based on admin status
+      if (isAdminMode || isAdmin) {
+        router.push('/admin/dashboard');
+      } else {
+        router.push('/chat');
+      }
     } catch (err: any) {
       const code = err?.code || '';
       let msg = err?.message || 'Authentication failed';
@@ -65,9 +70,9 @@ export default function LoginPage() {
         className="bg-white dark:bg-gray-900 shadow-lg rounded-xl p-8 w-full max-w-md"
       >
         {/* Admin Mode Banner */}
-        {isAdminMode && (
+    {(isAdminMode || isAdmin) && (
           <div className="mb-4 text-sm text-white bg-green-600 px-4 py-2 rounded text-center font-medium">
-            You are logging in as <span className="underline">Admin</span>
+      {isAdmin ? 'Authenticated as Admin' : 'You are logging in as Admin'}
           </div>
         )}
 

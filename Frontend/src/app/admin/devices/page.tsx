@@ -1,6 +1,8 @@
 'use client';
 import { FiRefreshCw, FiPlus, FiSearch, FiServer, FiWifi, FiWifiOff } from 'react-icons/fi';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAuth } from '@/components/AuthProvider';
+import { useRouter } from 'next/navigation';
 
 type Device = {
   id: string;
@@ -12,6 +14,13 @@ type Device = {
 };
 
 export default function DevicesPage() {
+  const { isAdmin, loading, user } = useAuth();
+  const router = useRouter();
+  useEffect(() => {
+    if (!loading && user && !isAdmin) router.replace('/not-authorized');
+    if (!loading && !user) router.replace('/login');
+  }, [isAdmin, loading, user, router]);
+  if (loading || (user && !isAdmin)) return <div className="p-6">Loading...</div>;
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 

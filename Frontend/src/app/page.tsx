@@ -1,12 +1,16 @@
-'use client';
+"use client";
 
 import Link from 'next/link';
-import { FiTerminal, FiWifi, FiServer, FiShield, FiArrowRight } from 'react-icons/fi';
+import { FiTerminal, FiWifi, FiServer, FiShield, FiArrowRight, FiLock, FiMail } from 'react-icons/fi';
 import { motion, Variants } from 'framer-motion';
+import React from 'react';
+import { useAuth } from '@/components/AuthProvider';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 // Best Practice: Define a type for your features for type safety and clarity.
 type Feature = {
-  icon: JSX.Element;
+  icon: React.ReactNode;
   title: string;
   description: string;
   link: string | null;
@@ -60,7 +64,79 @@ const FeatureCard = ({ feature, index }: { feature: Feature; index: number }) =>
   );
 };
 
+// Extracted login panel used when no user session present.
+function LoginPanel() {
+  const { signIn, signUp } = useAuth();
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isRegister, setIsRegister] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setPending(true);
+    try {
+      if (isRegister) {
+        await signUp(email, password);
+      } else {
+        await signIn(email, password);
+      }
+      router.refresh(); // trigger auth state update; landing will render below
+    } catch (err: any) {
+      setError(err?.message || 'Authentication failed');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <main className="min-h-screen flex items-center justify-center bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-800">
+      <motion.div
+        initial={{ opacity: 0, y: 40 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="bg-white dark:bg-gray-900 shadow-lg rounded-xl p-8 w-full max-w-md"
+      >
+        <h1 className="text-2xl font-bold text-center text-gray-800 dark:text-white mb-2">Network Command Hub</h1>
+        <p className="text-center text-sm text-gray-500 dark:text-gray-400 mb-6">Sign in to continue</p>
+        <form className="space-y-5" onSubmit={handleSubmit}>
+          <div>
+            <label className="text-gray-700 dark:text-gray-300 text-sm mb-1 block">Email</label>
+            <div className="flex items-center border rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800 dark:border-gray-700">
+              <FiMail className="text-gray-400 mr-2" />
+              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" className="w-full bg-transparent outline-none text-gray-800 dark:text-white" required />
+            </div>
+          </div>
+          <div>
+            <label className="text-gray-700 dark:text-gray-300 text-sm mb-1 block">Password</label>
+            <div className="flex items-center border rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800 dark:border-gray-700">
+              <FiLock className="text-gray-400 mr-2" />
+              <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" className="w-full bg-transparent outline-none text-gray-800 dark:text-white" required />
+            </div>
+          </div>
+          {error && <div className="text-sm text-red-500">{error}</div>}
+          <button type="submit" disabled={pending} className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-lg font-semibold transition-colors">
+            {pending ? 'Please wait...' : (isRegister ? 'Create Account' : 'Sign In')}
+          </button>
+        </form>
+        <div className="text-center text-sm text-gray-500 dark:text-gray-400 mt-6 space-y-1">
+          <p>
+            {isRegister ? 'Already have an account?' : 'Don’t have an account?'}{' '}
+            <button onClick={()=>setIsRegister(r=>!r)} className="text-indigo-600 hover:underline">{isRegister ? 'Sign In' : 'Register'}</button>
+          </p>
+        </div>
+      </motion.div>
+    </main>
+  );
+}
+
 export default function HomePage() {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  if (!user) return <LoginPanel />;
   const features: Feature[] = [
     {
       icon: <FiTerminal className="h-6 w-6" />,

@@ -34,3 +34,21 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Environment Variables
+
+Create a `.env.local` in `Frontend/`:
+
+```
+NEXT_PUBLIC_FIREBASE_API_KEY=xxxx
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=xxxx.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=xxxx
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=xxxx.appspot.com
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=xxxx
+NEXT_PUBLIC_FIREBASE_APP_ID=xxxx
+
+# Comma-separated list of admin emails (case-insensitive)
+NEXT_PUBLIC_ADMIN_EMAILS=admin@network.com
+```
+
+Non-admin authenticated users will only see Chat and Logs navigation links; admins see full dashboard, user, device, and settings sections.

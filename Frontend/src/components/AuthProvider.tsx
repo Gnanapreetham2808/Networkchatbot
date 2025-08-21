@@ -7,12 +7,13 @@ type AuthCtx = {
   user: User | null;
   loading: boolean;
   idToken: string | null;
+  isAdmin: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   signOutUser: () => Promise<void>;
 };
 
-const Ctx = createContext<AuthCtx>({ user: null, loading: true, idToken: null, signIn: async()=>{}, signUp: async()=>{}, signOutUser: async()=>{} });
+const Ctx = createContext<AuthCtx>({ user: null, loading: true, idToken: null, isAdmin: false, signIn: async()=>{}, signUp: async()=>{}, signOutUser: async()=>{} });
 
 export const useAuth = () => useContext(Ctx);
 
@@ -20,6 +21,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [idToken, setIdToken] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  const ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -32,8 +39,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.error('Token error', e);
           setIdToken(null);
         }
+        const emailLower = (u.email || '').toLowerCase();
+        setIsAdmin(ADMIN_EMAILS.includes(emailLower));
       } else {
         setIdToken(null);
+        setIsAdmin(false);
       }
       setLoading(false);
     });
@@ -50,5 +60,5 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await signOut(auth);
   }
 
-  return <Ctx.Provider value={{ user, loading, idToken, signIn, signUp, signOutUser }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, idToken, isAdmin, signIn, signUp, signOutUser }}>{children}</Ctx.Provider>;
 }

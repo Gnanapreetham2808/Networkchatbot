@@ -1,6 +1,8 @@
 'use client';
 import { FiUsers, FiPlus, FiEdit2, FiTrash2, FiSearch } from 'react-icons/fi';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAuth } from '@/components/AuthProvider';
+import { useRouter } from 'next/navigation';
 
 type User = {
   id: string;
@@ -11,6 +13,13 @@ type User = {
 };
 
 export default function UsersPage() {
+  const { isAdmin, loading, user } = useAuth();
+  const router = useRouter();
+  useEffect(() => {
+    if (!loading && user && !isAdmin) router.replace('/not-authorized');
+    if (!loading && !user) router.replace('/login');
+  }, [isAdmin, loading, user, router]);
+  if (loading || (user && !isAdmin)) return <div className="p-6">Loading...</div>;
   const [searchQuery, setSearchQuery] = useState('');
   
   // Mock data - replace with API call in future

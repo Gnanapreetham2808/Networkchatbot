@@ -1,8 +1,17 @@
 'use client';
 import { FiSave, FiSliders, FiBell, FiShield, FiUser } from 'react-icons/fi';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAuth } from '@/components/AuthProvider';
+import { useRouter } from 'next/navigation';
 
 export default function SettingsPage() {
+  const { isAdmin, loading, user } = useAuth();
+  const router = useRouter();
+  useEffect(() => {
+    if (!loading && user && !isAdmin) router.replace('/not-authorized');
+    if (!loading && !user) router.replace('/login');
+  }, [isAdmin, loading, user, router]);
+  if (loading || (user && !isAdmin)) return <div className="p-6">Loading...</div>;
   const [settings, setSettings] = useState({
     darkMode: false,
     notifications: true,

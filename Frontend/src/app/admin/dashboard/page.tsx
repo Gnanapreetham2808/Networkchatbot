@@ -1,6 +1,17 @@
+"use client";
 import { FiActivity, FiServer, FiShield, FiList } from 'react-icons/fi';
+import { useAuth } from '@/components/AuthProvider';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 
 export default function DashboardPage() {
+  const { isAdmin, loading, user } = useAuth();
+  const router = useRouter();
+  useEffect(() => {
+    if (!loading && user && !isAdmin) router.replace('/not-authorized');
+    if (!loading && !user) router.replace('/login');
+  }, [isAdmin, loading, user, router]);
+  if (loading || (user && !isAdmin)) return <div className="p-6">Loading...</div>;
   const stats = [
     { title: "Active Devices", value: "24", icon: <FiServer className="h-6 w-6" />, trend: "up" },
     { title: "Pending Changes", value: "5", icon: <FiList className="h-6 w-6" />, trend: "neutral" },
