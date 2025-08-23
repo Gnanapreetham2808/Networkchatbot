@@ -1,0 +1,242 @@
+{
+  "network_automation_corpus": {
+    "intents": [
+      {
+        "intent_id": "find_free_port",
+        "description": "Find an available port on a switch to connect a new device.",
+        "user_queries": [
+          "What port should I connect any device?",
+          "I need to find a free port for a camera.",
+          "Which ports are available on the switch?"
+        ],
+        "required_info_from_user": [
+          "Location details (e.g., building, floor)",
+          "Switch name or IP address if known"
+        ],
+        "associated_commands": [
+          "show interface status",
+          "show ip interface brief"
+        ],
+        "notes": "The goal is to find an interface with a 'down' or 'notconnect' status."
+      },
+      {
+        "intent_id": "list_vlans",
+        "description": "List all configured VLANs on a network device.",
+        "user_queries": [
+          "how many vlans",
+          "show me the vlans",
+          "list all vlans on the switch"
+        ],
+        "associated_commands": [
+          "show vlan"
+        ]
+      },
+      {
+        "intent_id": "check_sfp_connections",
+        "description": "Check if any SFPs (Small Form-factor Pluggables) are connected to interfaces.",
+        "user_queries": [
+          "any sfps connected to interfaces",
+          "show sfp details"
+        ],
+        "associated_commands": [
+          "show interface status"
+        ],
+        "notes": "The output of 'show interface status' will often list the type of module connected, such as '1000BaseSX SFP'."
+      },
+      {
+        "intent_id": "assign_ip_address",
+        "description": "Assign an IP address to a switch interface.",
+        "user_queries": [
+          "IP address to be assigned.",
+          "How to configure an IP on an interface?"
+        ],
+        "configuration_steps": [
+          "conf t",
+          "interface <interface_name>",
+          "ip address <ip_address> <subnet_mask>",
+          "no shutdown"
+        ]
+      },
+      {
+        "intent_id": "find_mac_address",
+        "description": "Find the MAC address table of a switch.",
+        "user_queries": [
+          "Mac-address on the switch",
+          "show me the mac address table"
+        ],
+        "associated_commands": [
+          "show mac address-table"
+        ]
+      },
+      {
+        "intent_id": "change_vlan_on_port",
+        "description": "Change the VLAN assignment for a specific switch port.",
+        "user_queries": [
+          "Changing of VLAN on Port",
+          "Move a port to a different vlan"
+        ],
+        "configuration_steps": [
+          "conf t",
+          "interface <interface_name>",
+          "switchport mode access",
+          "switchport access vlan <vlan_id>",
+          "no shutdown"
+        ]
+      },
+      {
+        "intent_id": "find_device_neighbors",
+        "description": "Discover directly connected network devices.",
+        "user_queries": [
+          "who are connected to me",
+          "show cdp neighbors"
+        ],
+        "associated_commands": [
+          "show cdp neighbors",
+          "show cdp neighbors detail"
+        ]
+      }
+    ],
+    "use_cases": [
+      {
+        "use_case_id": "UC-001",
+        "title": "Connect CCTV Cameras to a Switch",
+        "scenario": "A Project Manager needs to provide information to the local IT team to connect new CCTV cameras to a switch. The process involves identifying a free port and assigning it to the correct VLAN.",
+        "procedure": [
+          {
+            "step": 1,
+            "title": "Verify Switch Location",
+            "description": "The Network Engineer identifies the target switch. For example: Bangalore Office, 2nd Floor, Switch Name: BLRSW001."
+          },
+          {
+            "step": 2,
+            "title": "Identify Available Ports",
+            "description": "The engineer checks for available network ports on the switch. The 'show ip interface brief' command is used to find interfaces in a 'down' state.",
+            "command_details": {
+              "command": "BLRSW001#sh ip int brief",
+              "example_output": "Interface              IP-Address      OK? Method Status                Protocol\nVlan1                  192.168.10.2    YES NVRAM  up                    up\nFastEthernet1/0/1      unassigned      YES unset  up                    up\nFastEthernet1/0/2      unassigned      YES unset  down                  down\nFastEthernet1/0/3      unassigned      YES unset  down                  down\nFastEthernet1/0/4      unassigned      YES unset  up                    up\nFastEthernet1/0/5      unassigned      YES unset  up                    up\nFastEthernet1/0/6      unassigned      YES unset  down                  down"
+            }
+          },
+          {
+            "step": 3,
+            "title": "Identify Correct VLAN",
+            "description": "The engineer checks for a pre-configured VLAN for cameras. The 'show vlan' command is used.",
+            "command_details": {
+              "command": "BLRSW001#sh vlan",
+              "example_output": "VLAN Name                             Status    Ports\n---- -------------------------------- --------- -------------------------------\n1    default                          active    Fa1/0/1, Fa1/0/3, Fa1/0/4, Fa1/0/5, Fa1/0/7, Fa1/0/8, Fa1/0/9, Fa1/0/10, Fa1/0/11, Fa1/0/12, Gi1/0/1, Gi1/0/2\n3    CCTV                             active",
+              "analysis": "A 'CCTV' VLAN with ID 3 already exists. The available port should be assigned to this VLAN."
+            }
+          },
+          {
+            "step": 4,
+            "title": "Configure Network Settings",
+            "description": "The engineer configures the selected port (e.g., FastEthernet1/0/2) to be an access port in VLAN 3.",
+            "command_details": {
+              "command": "BLRSW001#conf t\nBLRSW001(config)#interface FastEthernet1/0/2\nBLRSW001(config-if)#switchport mode access\nBLRSW001(config-if)#switchport access vlan 3\nBLRSW001(config-if)#no shut"
+            }
+          },
+          {
+            "step": 5,
+            "title": "Test Connection",
+            "description": "The local IT team physically connects the camera cable to the configured port, and the CCTV team tests the connectivity."
+          }
+        ]
+      },
+      {
+        "use_case_id": "UC-002",
+        "title": "Verify IP Address Configuration on Switches",
+        "scenario": "A network administrator needs to verify the IP address configurations of switches for troubleshooting, security audits, or routine maintenance.",
+        "procedure": [
+          {
+            "step": 1,
+            "title": "Identify Switches",
+            "description": "Determine the specific switches that require verification based on network topology or troubleshooting needs. For example, the core switch 'BLRCORE1' is identified as holding all VLAN IP details."
+          },
+          {
+            "step": 2,
+            "title": "Gather IP Information",
+            "description": "Connect to the switch via SSH/SNMP and use 'show ip interface brief' to get a summary of all IP interfaces.",
+            "command_details": {
+              "command": "BLRCORE1#sh ip int brief",
+              "example_output": "Interface                  IP-Address      OK? Method Status                Protocol\nGigabitEthernet0/1         192.168.1.1     Yes RARP   up                    up\nGigabitEthernet0/2         10.0.0.1        Yes RARP   up                    up\nVlan100                    172.16.100.1    Yes RARP   up                    up"
+            }
+          },
+          {
+            "step": 3,
+            "title": "Check for IP Address Conflicts",
+            "description": "Use the 'show arp' command to display the ARP table, which lists IP addresses and their corresponding MAC addresses, to help identify potential duplicate IP addresses on the network."
+          },
+          {
+            "step": 4,
+            "title": "Document Findings",
+            "description": "Record the IP address configuration of each switch, including any discrepancies or issues identified, and document any changes made."
+          }
+        ]
+      },
+      {
+        "use_case_id": "UC-003",
+        "title": "Verify Cisco IOS Version on Switches",
+        "scenario": "A Network Operations Center (NOC) team needs to regularly verify the IOS versions on Cisco switches to identify outdated software for performance, security, and feature compatibility reasons.",
+        "procedure": [
+          {
+            "step": 1,
+            "title": "Identify Target Switches",
+            "description": "The NOC Engineer identifies a group of switches to check. For example, at 'BLR Site 2', switches BLRACSW1, BLRACSW2, BLRACSW3, and BLRACSW4 are identified."
+          },
+          {
+            "step": 2,
+            "title": "Retrieve Version Information",
+            "description": "The engineer logs into each switch via SSH and executes the 'show version' command to get detailed information about the software version.",
+            "command_details": {
+              "command": "BLRACSW1#sh version",
+              "example_output": "Cisco IOS Software, C3750 Software (C3750-UNIVERSALK9-M), Version 15.2(4)S4, RELEASE SOFTWARE (fc2)\nTechnical Support: http://www.cisco.com/techsupport\nCopyright (c) 1986-2014 by Cisco Systems, Inc.\nCompiled Fri 12-Sep-14 16:33 by prod_rel_team\nROM: System Bootstrap, Version 12.2(53S)XE5, RELEASE SOFTWARE (fc1)\ncisco c3750 uptime is 7 weeks, 1 day, 19 hours, and 19 minutes\nSystem returned to ROM by power-on"
+            }
+          },
+          {
+            "step": 3,
+            "title": "Analyze and Document",
+            "description": "The tool or engineer must parse the output to extract the key version information (e.g., 'Version 15.2(4)S4') and store it in a database or document for assessment and planning of necessary upgrades."
+          }
+        ]
+      }
+    ],
+    "reference_data": {
+      "ip_plan": [
+        {
+          "region": "APAC",
+          "sub_regions": [
+            {
+              "location": "India",
+              "cidr": "10.1.0.0/16",
+              "cities": [
+                {
+                  "name": "Bangalore",
+                  "cidr": "10.1.0.0/21"
+                },
+                {
+                  "name": "Hyderabad",
+                  "cidr": "10.1.8.0/21"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "region": "EMEA",
+          "sub_regions": [
+            {
+              "location": "Germany",
+              "cidr": "10.2.0.0/16",
+              "cities": [
+                {
+                  "name": "Berlin",
+                  "cidr": "10.2.0.0/21"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+
