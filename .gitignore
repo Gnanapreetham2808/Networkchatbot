@@ -175,13 +175,4 @@ Thumbs.db
 *.tmp
 *.temp
 
-# Model / training artifacts (prevent huge pushes)
-*.safetensors
-*.bin
-training_args.bin
-generation_config.json
-tokenizer.json
-tokenizer_config.json
-special_tokens_map.json
-Backend/netops_backend/cli_model*/
-**/checkpoint-*/
+# (Model artifacts now tracked with Git LFS; do not ignore)
