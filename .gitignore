@@ -175,4 +175,21 @@ Thumbs.db
 *.tmp
 *.temp
 
-# (Model artifacts now tracked with Git LFS; do not ignore)
+# Model artifacts (do not commit fine-tuned weights)
+Backend/netops_backend/chatbot/nlp_engine/cli_model/
+Backend/netops_backend/chatbot/nlp_engine/cli_modeltrain1/
+Backend/netops_backend/chatbot/nlp_engine/cli_model_train1_run2/
+Backend/netops_backend/chatbot/nlp_engine/cli_model_kaggle/
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v1/**
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v2/**
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v3/**
+*.safetensors
+*.bin
+tokenizer.json
+spiece.model
+training_args.bin
+generation_config.json
+
+# Keep template env but ignore real secrets
+!Backend/.env.example
+Backend/.env
