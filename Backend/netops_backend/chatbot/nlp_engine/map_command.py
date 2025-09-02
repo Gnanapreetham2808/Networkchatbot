@@ -52,13 +52,45 @@ def map_to_cli(user_input: str) -> Dict:
     if os.getenv("USE_MODEL_MAPPING", "1") == "1" and _MODEL_OK:
         gen = _nl_to_cli(user_input)
         if gen and not gen.startswith("[Error]"):
-            return {
-                "command": gen.strip(),
-                "candidates": [gen.strip()],
-                "source": "model",
-                "score": 0.5,
-                "note": "model fallback",
-            }
+            cleaned = gen.strip()
+            low = cleaned.lower()
+            # Avoid executing a bare 'show' which triggers interactive help.
+            if low == "show":
+                # Heuristic refinement based on user input keywords
+                kw_map = [
+                    ("interface", "show ip interface brief"),
+                    ("interfaces", "show ip interface brief"),
+                    ("version", "show version"),
+                    ("model", "show version"),
+                    ("vlan", "show vlan brief"),
+                    ("route", "show ip route"),
+                    ("routes", "show ip route"),
+                    ("cpu", "show processes cpu"),
+                    ("memory", "show processes memory"),
+                ]
+                chosen = None
+                txt = user_input.lower()
+                for k, cmd in kw_map:
+                    if k in txt:
+                        chosen = cmd
+                        break
+                if chosen:
+                    return {
+                        "command": chosen,
+                        "candidates": [chosen],
+                        "source": "model_refined",
+                        "score": 0.55,
+                        "note": "refined from bare 'show'",
+                    }
+                # If we cannot refine, drop to no-match so caller can respond gracefully
+            else:
+                return {
+                    "command": cleaned,
+                    "candidates": [cleaned],
+                    "source": "model",
+                    "score": 0.5,
+                    "note": "model fallback",
+                }
     return {
         "command": "",
         "candidates": [],

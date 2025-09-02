@@ -1,148 +1,136 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-
-from .network import run_command_on_switch
-from .nlp_engine.intent import classify_intent
-from .nlp_engine.ner import extract_entities
-from .nlp_engine.map_command import map_to_cli
-from .nlp_engine.safety import gate_command
-from .nlp_engine.response_generator import generate_natural_response
-from .nlp_engine.retrieval import log_interaction
-
-from .auth import FirebaseAuthentication, IsAdminOrChatUser
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+import os
+from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
+
+from netops_backend.nlp_model import predict_cli
+try:
+    from Devices.device_resolver import resolve_device  # Devices folder at project root
+except ModuleNotFoundError:
+    # Fallback if moved inside project package later
+    from netops_backend.Devices.device_resolver import resolve_device  # type: ignore
 
 
 @method_decorator(csrf_exempt, name="dispatch")
 class NetworkCommandAPIView(APIView):
-    # Auth removed conditionally via settings (DISABLE_AUTH). Override only if needed.
+    """Endpoint: NL query -> generated CLI -> execute via Netmiko -> raw output.
+
+    POST JSON: {"query": "show interfaces", "device_ip": "192.168.1.10"}
+    Success: {"output": "...raw device output..."}
+    Errors:
+      {"error": "Unable to connect to device"}
+      {"error": "Failed to run command"}
+    """
 
     def get(self, request):
-        return Response(
-            {"message": "GET request received. This endpoint is intended for POST requests with device_ip and query."},
-            status=status.HTTP_200_OK
-        )
+        return Response({"detail": "POST JSON with 'device_ip' and 'query'"}, status=200)
 
     def post(self, request):
-        # Debug: log incoming request
+        data = getattr(request, 'data', {}) or {}
+        query = data.get("query") or (request.query_params.get("query") if hasattr(request, "query_params") else None)
+        device_ip = data.get("device_ip") or data.get("ip") or (request.query_params.get("device_ip") if hasattr(request, "query_params") else None)
+        hostname = data.get("hostname") or data.get("device_hostname") or (request.query_params.get("hostname") if hasattr(request, "query_params") else None)
+
+        if not query:
+            return Response({"error": "Failed to run command"}, status=400)
+
+        # Resolve device alias from natural language query if explicit device not provided
+        resolved_device_dict = None
+        ambiguity_candidates = []
+        if not device_ip and not hostname:
+            dev_dict, candidates, err = resolve_device(query)
+            if dev_dict:
+                resolved_device_dict = dev_dict
+                device_ip = dev_dict.get("host") or dev_dict.get("ip")
+                hostname = dev_dict.get("alias") or None
+            elif candidates:
+                return Response({"error": "Multiple switches found, please specify one", "candidates": candidates}, status=400)
+            else:
+                # fallback remains: we proceed but connection will likely fail
+                pass
+        else:
+            # If alias specified directly, attempt resolution too for credentials
+            alias_candidate = hostname or device_ip
+            dev_dict, candidates, err = resolve_device(alias_candidate)
+            if dev_dict:
+                resolved_device_dict = dev_dict
+                device_ip = dev_dict.get("host") or dev_dict.get("ip") or device_ip
+            elif candidates:
+                return Response({"error": "Multiple switches found, please specify one", "candidates": candidates}, status=400)
+
+        print(f"[NetworkCommandAPIView] query={query!r} target={device_ip} alias_host={hostname}")
+
+        if not device_ip:
+            return Response({"error": "Failed to run command"}, status=400)
+
+        cli_command = predict_cli(query)
+        print(f"[NetworkCommandAPIView] predicted_cli={cli_command}")
+        if not cli_command or cli_command.startswith("[Error]"):
+            return Response({"error": "Failed to run command"}, status=500)
+
+        # Allow overrides via request (optional) else fall back to env
+        req_username = data.get("username")
+        req_password = data.get("password")
+        req_secret = data.get("secret")
+        req_type = data.get("device_type")
+        req_port = data.get("port")
+
+        env_username = os.getenv("DEVICE_USERNAME", "admin")
+        env_password = os.getenv("DEVICE_PASSWORD", "admin")
+        env_secret = os.getenv("DEVICE_SECRET", "")
+        env_type = os.getenv("DEVICE_TYPE", "cisco_ios")
+        env_port = os.getenv("DEVICE_PORT")
+        conn_timeout = float(os.getenv("DEVICE_CONN_TIMEOUT", "8"))
+        auth_timeout = float(os.getenv("DEVICE_AUTH_TIMEOUT", "10"))
+        banner_timeout = float(os.getenv("DEVICE_BANNER_TIMEOUT", "15"))
+        # Telnet-only attempt
+        device = {
+            "device_type": (resolved_device_dict or {}).get("device_type", "cisco_ios_telnet" if True else "cisco_ios"),
+            "host": device_ip,
+            "username": (resolved_device_dict or {}).get("username") or req_username or env_username,
+            "password": (resolved_device_dict or {}).get("password") or req_password or env_password,
+            "secret": (resolved_device_dict or {}).get("secret") or (req_secret if req_secret is not None else env_secret),
+            "fast_cli": True,
+            "timeout": conn_timeout,
+            "conn_timeout": conn_timeout,
+            "auth_timeout": auth_timeout,
+            "banner_timeout": banner_timeout,
+            "port": 23,
+        }
+        print("[NetworkCommandAPIView] telnet connect attempt 23")
         try:
-            print("[NetworkCommandAPIView] Incoming headers Content-Type=", request.headers.get('Content-Type'))
-            print("[NetworkCommandAPIView] Raw body bytes:", len(getattr(request, 'body', b'')))
-            if getattr(request, 'body', b''):
-                preview = request.body[:200]
-                print("[NetworkCommandAPIView] Body preview:", preview)
-        except Exception as _e:
-            print("[NetworkCommandAPIView] Logging error", _e)
+            net_connect = ConnectHandler(**device)
+        except (NetmikoTimeoutException, NetmikoAuthenticationException, OSError) as e:
+            print(f"[NetworkCommandAPIView] telnet connect failed -> {e}")
+            return Response({"error": "Unable to connect to device"}, status=502)
+        except Exception as e:
+            print(f"[NetworkCommandAPIView] unexpected telnet error -> {e}")
+            return Response({"error": "Unable to connect to device"}, status=502)
 
-        # Extract request data
-        device_ip = request.data.get("device_ip") if hasattr(request, "data") else None
-        user_query = request.data.get("query") if hasattr(request, "data") else None
-        confirm_sensitive = request.data.get("confirm_sensitive", False) if hasattr(request, "data") else False
-
-        # Try raw body JSON if parsing failed
-        if (not device_ip or not user_query) and getattr(request, 'body', None):
+        try:
+            if (req_secret or env_secret):
+                try:
+                    net_connect.enable()
+                except Exception as ee:
+                    print(f"[NetworkCommandAPIView] enable failed (continuing): {ee}")
+            output = net_connect.send_command(cli_command, expect_string=None, use_textfsm=False)
+        except Exception as e:
+            print(f"[NetworkCommandAPIView] command exec failure: {e}")
             try:
-                import json
-                raw = json.loads(request.body.decode("utf-8"))
-                device_ip = device_ip or raw.get("device_ip")
-                user_query = user_query or raw.get("query")
-                if 'confirm_sensitive' in raw:
-                    confirm_sensitive = raw['confirm_sensitive']
+                net_connect.disconnect()
+            except Exception:
+                pass
+            return Response({"error": "Failed to run command"}, status=500)
+        finally:
+            try:
+                net_connect.disconnect()
             except Exception:
                 pass
 
-        # Query params fallback
-        if not device_ip and hasattr(request, 'query_params'):
-            device_ip = request.query_params.get('device_ip')
-        if not user_query and hasattr(request, 'query_params'):
-            user_query = request.query_params.get('query')
-
-        # If still missing required fields
-        if not device_ip or not user_query:
-            return Response(
-                {
-                    "error": "Missing device_ip or query",
-                    "received": {"device_ip": device_ip, "query": user_query},
-                    "content_type": request.headers.get('Content-Type'),
-                    "raw_body_len": len(getattr(request, 'body', b'')),
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Step 1: NLP extraction
-        intent_result = classify_intent(user_query)
-        entities_result = extract_entities(user_query)
-
-        # Detect target entity
-        command_target = None
-        for ent in entities_result.get("entities", []):
-            if ent["entity_group"].lower() in ["interface", "ip", "vlan"]:
-                command_target = ent["word"]
-                break
-
-        fallback_reason = None if command_target else "No specific entity extracted; proceeding with generic command mapping"
-
-        # Step 2: Map to CLI
-        mapping_result = map_to_cli(user_query)
-        cli_command = mapping_result.get("command", "")
-
-        # Step 2.1: Safety check
-        safety_info = gate_command(cli_command)
-
-        # Auto-add 'show' for safe read-only queries
-        if not safety_info["allowed"] and intent_result.get("label") == "show":
-            if not cli_command.lower().startswith("show"):
-                cli_command = f"show {cli_command}".strip()
-                safety_info = gate_command(cli_command)
-
-        # Sensitive command check
-        if safety_info["needs_confirmation"] and not confirm_sensitive:
-            return Response({
-                "warning": "Sensitive command detected. Please confirm to proceed.",
-                "intent": intent_result,
-                "entities": entities_result,
-                "cli_command": cli_command,
-                "safety": safety_info,
-                "requires_confirmation": True
-            }, status=status.HTTP_200_OK)
-
-        # Block if unsafe
-        if not safety_info["allowed"] and not safety_info["needs_confirmation"]:
-            return Response(
-                {"error": f"Command not allowed: {safety_info['reason']}"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Step 3: Run command
-        try:
-            output = run_command_on_switch(device_ip, cli_command)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # Step 4: Natural language summarization
-        output_natural = generate_natural_response(intent_result, entities_result, cli_command, output)
-
-        # Step 4.1: Log interaction for future retrieval (best-effort)
-        try:
-            log_interaction(user_query, output)
-        except Exception as e:
-            print("[NetworkCommandAPIView] retrieval log error", e)
-
-        # Step 5: Response
-        return Response({
-            "query": user_query,
-            "intent": intent_result,
-            "entities": entities_result,
-            "cli_command": cli_command,
-            "command_mapping": mapping_result,
-            "safety": safety_info,
-            "output_raw": output,
-            "output_natural": output_natural,
-            "output": output_natural,
-            "note": fallback_reason
-        }, status=status.HTTP_200_OK)
+        return Response({"output": output}, status=200)
 
 
 @method_decorator(csrf_exempt, name="dispatch")
