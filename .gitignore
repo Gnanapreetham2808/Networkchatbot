@@ -193,3 +193,15 @@ generation_config.json
 # Keep template env but ignore real secrets
 !Backend/.env.example
 Backend/.env
+
+# Ignore model artifacts
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v1/
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v2/
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v3/
+*.safetensors
+*.bin
+*.pt
+tokenizer.json
+tokenizer_config.json
+special_tokens_map.json
+generation_config.json
