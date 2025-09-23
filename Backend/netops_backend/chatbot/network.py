@@ -41,18 +41,19 @@ def run_command_on_switch(ip, command):
         return _simulate_output(command)
 
     pre_t = float(os.getenv('NETWORK_PRECHECK_TIMEOUT', '2'))
-    if not _precheck_port(ip, 23, pre_t):
+    if not _precheck_port(ip, 22, pre_t):
         return _simulate_output(command)
 
     try:
         device = {
-            'device_type': 'cisco_ios_telnet',
+            'device_type': 'cisco_ios',
             'host': ip,
             'username': ' ',  # space placeholder
             'password': 'cisco',
             'secret': '',
             'timeout': float(os.getenv('NETWORK_COMMAND_TIMEOUT', '8')),
             'conn_timeout': float(os.getenv('NETWORK_PRECHECK_TIMEOUT', '2')),
+            'port': 22,
         }
         net_connect = ConnectHandler(**device)
         output = net_connect.send_command(command, read_timeout=5)

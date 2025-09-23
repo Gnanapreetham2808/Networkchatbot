@@ -86,9 +86,9 @@ class NetworkCommandAPIView(APIView):
         conn_timeout = float(os.getenv("DEVICE_CONN_TIMEOUT", "8"))
         auth_timeout = float(os.getenv("DEVICE_AUTH_TIMEOUT", "10"))
         banner_timeout = float(os.getenv("DEVICE_BANNER_TIMEOUT", "15"))
-        # Telnet-only attempt
+        # SSH connection attempt
         device = {
-            "device_type": (resolved_device_dict or {}).get("device_type", "cisco_ios_telnet" if True else "cisco_ios"),
+            "device_type": (resolved_device_dict or {}).get("device_type", "cisco_ios"),
             "host": device_ip,
             "username": (resolved_device_dict or {}).get("username") or req_username or env_username,
             "password": (resolved_device_dict or {}).get("password") or req_password or env_password,
@@ -98,16 +98,16 @@ class NetworkCommandAPIView(APIView):
             "conn_timeout": conn_timeout,
             "auth_timeout": auth_timeout,
             "banner_timeout": banner_timeout,
-            "port": 23,
+            "port": int(req_port or env_port or 22),
         }
-        print("[NetworkCommandAPIView] telnet connect attempt 23")
+        print(f"[NetworkCommandAPIView] ssh connect attempt {device['port']}")
         try:
             net_connect = ConnectHandler(**device)
         except (NetmikoTimeoutException, NetmikoAuthenticationException, OSError) as e:
-            print(f"[NetworkCommandAPIView] telnet connect failed -> {e}")
+            print(f"[NetworkCommandAPIView] ssh connect failed -> {e}")
             return Response({"error": "Unable to connect to device"}, status=502)
         except Exception as e:
-            print(f"[NetworkCommandAPIView] unexpected telnet error -> {e}")
+            print(f"[NetworkCommandAPIView] unexpected ssh error -> {e}")
             return Response({"error": "Unable to connect to device"}, status=502)
 
         try:
