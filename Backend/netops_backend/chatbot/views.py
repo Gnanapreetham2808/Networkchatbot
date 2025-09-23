@@ -13,6 +13,14 @@ except ModuleNotFoundError:
     # Fallback if moved inside project package later
     from netops_backend.Devices.device_resolver import resolve_device  # type: ignore
 
+# Simple command safety allowlist (read-only)
+SAFE_PREFIXES = (
+    'show ', 'dir', 'display '
+)
+BLOCKED_SUBSTRINGS = (
+    ' delete', ' erase', ' write ', ' format', ' reload', ' shutdown', ' no shutdown', 'copy ', ' tftp', ' ftp ', 'scp '
+)
+
 
 @method_decorator(csrf_exempt, name="dispatch")
 class NetworkCommandAPIView(APIView):
@@ -70,6 +78,13 @@ class NetworkCommandAPIView(APIView):
         print(f"[NetworkCommandAPIView] predicted_cli={cli_command}")
         if not cli_command or cli_command.startswith("[Error]"):
             return Response({"error": "Failed to run command"}, status=500)
+
+        lc = cli_command.strip().lower()
+        # Enforce read-only by default
+        if not any(lc.startswith(p) for p in SAFE_PREFIXES):
+            return Response({"error": "Command not allowed", "command": cli_command}, status=400)
+        if any(b in lc for b in BLOCKED_SUBSTRINGS):
+            return Response({"error": "Command blocked for safety", "command": cli_command}, status=400)
 
         # Allow overrides via request (optional) else fall back to env
         req_username = data.get("username")

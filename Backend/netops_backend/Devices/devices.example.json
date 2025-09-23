@@ -1,0 +1,8 @@
+{
+  "INVIJB1SW1": {
+    "host": "192.168.10.1",
+    "username": "${DEVICE_USERNAME}",
+    "password": "${DEVICE_PASSWORD}",
+    "device_type": "cisco_ios"
+  }
+}

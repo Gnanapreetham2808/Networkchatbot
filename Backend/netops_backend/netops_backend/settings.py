@@ -8,13 +8,11 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-vod$fi329&a4@8gur3yu!@x6hfaw379l7e&nl510q17=c$r0ri'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+# SECURITY: configuration via environment variables
+# NOTE: For development, defaults are provided. Override in .env or host env.
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-insecure-change-me')
+DEBUG = os.getenv('DJANGO_DEBUG', '1') == '1'
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h.strip()]
 
 # Application definition
 INSTALLED_APPS = [
@@ -103,9 +101,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # ✅ CORS Settings to allow Next.js frontend
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-]
+# Comma-separated list from env; defaults to localhost dev URLs
+_cors_origins = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000')
+CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins.split(',') if o.strip()]
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-encoding', 'authorization', 'content-type', 'dnt', 'origin',
@@ -116,11 +114,25 @@ CORS_PREFLIGHT_MAX_AGE = 86400
 
 CORS_ALLOW_CREDENTIALS = True
 
-# Auth disabled globally for development (re-enable later by restoring previous block)
+# Auth: AllowAny in development by default. Override in production.
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
     ]
 }
-print('[settings] Global auth disabled (REST_FRAMEWORK AllowAny).')
+
+# Basic logging to console
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+    },
+}
