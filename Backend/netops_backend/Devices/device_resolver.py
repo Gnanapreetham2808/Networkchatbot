@@ -71,10 +71,26 @@ def resolve_device(query: str) -> Tuple[Optional[dict], List[str], Optional[str]
     if len(phrase_hits) > 1:
         return None, phrase_hits, "Multiple phrase matches"
 
-    # 3. Partial fuzzy: any alias with shared substring of building or switch keywords
-    if re.search(r"vijayawada", q, re.I) and re.search(r"switch", q, re.I):
-        # return all switches in that site if numbering ambiguous
-        site_candidates = [a for a in devices.keys() if a.startswith("INVIJB1SW")] or list(devices.keys())
+    # 3. UKLONB1SWN style parsing: country(UK) city(LON) building(B1) switch(SW2)
+    m = re.search(r"\b(UK)([A-Z]{3})B(\d+)SW(\d+)\b", upper_q)
+    if m:
+        alias = m.group(0)
+        if alias in devices:
+            return devices[alias], [], None
+        # otherwise suggest candidates from same city/building
+        city = m.group(2)
+        bld = m.group(3)
+        prefix = f"UK{city}B{bld}SW"
+        cands = [a for a in devices.keys() if a.startswith(prefix)]
+        if len(cands) == 1:
+            return devices[cands[0]], [], None
+        if cands:
+            return None, cands, "Ambiguous switch reference"
+
+    # 4. Partial fuzzy: any alias with shared substring of building or switch keywords
+    if re.search(r"(vijayawada|london|lon)", q, re.I) and re.search(r"switch", q, re.I):
+        # site-based candidates
+        site_candidates = [a for a in devices.keys() if any(a.startswith(p) for p in ("INVIJB1SW", "UKLONB"))] or list(devices.keys())
         if len(site_candidates) == 1:
             return devices[site_candidates[0]], [], None
         return None, site_candidates, "Ambiguous switch reference"

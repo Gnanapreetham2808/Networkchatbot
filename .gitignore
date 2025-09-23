@@ -183,6 +183,8 @@ Backend/netops_backend/chatbot/nlp_engine/cli_model_kaggle/
 Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v1/**
 Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v2/**
 Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v3/**
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v5/**
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_lora_v5*/**
 *.safetensors
 *.bin
 tokenizer.json
@@ -198,6 +200,8 @@ Backend/.env
 Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v1/
 Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v2/
 Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v3/
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_model_v5/
+Backend/netops_backend/chatbot/nlp_engine/t5_cli_lora_v5*/
 *.safetensors
 *.bin
 *.pt

@@ -4,9 +4,24 @@ Django settings for netops_backend project.
 
 from pathlib import Path
 import os
+try:
+    from dotenv import load_dotenv  # type: ignore
+except Exception:
+    load_dotenv = None  # fallback if not installed
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load env from Backend/.env reliably (try Backend/.env then project/.env)
+if load_dotenv is not None:
+    candidates = [
+        BASE_DIR.parent / ".env",   # Backend/.env
+        BASE_DIR / ".env",          # project-level .env (fallback)
+    ]
+    for p in candidates:
+        if p.exists():
+            load_dotenv(str(p))
+            break
 
 # SECURITY: configuration via environment variables
 # NOTE: For development, defaults are provided. Override in .env or host env.

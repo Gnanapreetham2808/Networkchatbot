@@ -2,9 +2,11 @@
 
 Model directory resolution order:
 1. Environment variable CLI_MODEL_PATH (absolute or relative to this file's parent)
-2. ./t5_cli_v3 (legacy name next to this file)
-3. ../chatbot/nlp_engine/t5_cli_model_v3 (location you reported)
-4. Any directory in ../chatbot/nlp_engine whose name starts with t5_cli and contains model files
+2. ./t5_cli_v5 (preferred)
+3. ../chatbot/nlp_engine/t5_cli_model_v5 (preferred location)
+4. ./t5_cli_v3 (legacy fallback)
+5. ../chatbot/nlp_engine/t5_cli_model_v3 (legacy fallback)
+6. Any directory in ../chatbot/nlp_engine whose name starts with t5_cli and contains model files
 
 Exports predict_cli(query: str) -> str returning one decoded CLI command (or
 an error string prefixed with [Error]).
@@ -14,9 +16,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
+import json
+import shutil
+import tempfile
 import threading
 
 from transformers import T5ForConditionalGeneration, AutoTokenizer
+try:
+    from peft import PeftModel, LoraConfig
+    _PEFT_AVAILABLE = True
+except Exception:
+    _PEFT_AVAILABLE = False
 
 _LOCK = threading.Lock()
 _MODEL: Optional[T5ForConditionalGeneration] = None
@@ -38,12 +48,16 @@ def _candidate_model_dirs() -> list[Path]:
             p = base / p
         candidates.append(p)
 
-    # 2. Legacy sibling name
+    # 2. Preferred v5 sibling name
+    candidates.append(base / "t5_cli_v5")
+    # 3. Preferred v5 model path inside nlp_engine
+    candidates.append(base.parent / "chatbot" / "nlp_engine" / "t5_cli_model_v5")
+
+    # 4. Legacy v3 names (fallback)
     candidates.append(base / "t5_cli_v3")
-    # 3. Reported actual path (../chatbot/nlp_engine/t5_cli_model_v3)
     candidates.append(base.parent / "chatbot" / "nlp_engine" / "t5_cli_model_v3")
 
-    # 4. Any t5_cli* directory inside nlp_engine
+    # 6. Any t5_cli* directory inside nlp_engine
     nlp_engine_dir = base.parent / "chatbot" / "nlp_engine"
     if nlp_engine_dir.exists():
         for d in sorted(nlp_engine_dir.glob("t5_cli*")):
@@ -71,7 +85,43 @@ def _select_model_dir() -> Path:
             errors.append(f"{cand} (missing required files)")
         else:
             errors.append(f"{cand} (not found)")
-    raise FileNotFoundError("No valid model directory found. Tried: " + "; ".join(errors))
+    raise FileNotFoundError("No valid full model directory found. Tried: " + "; ".join(errors))
+
+
+def _find_adapter_dir() -> Optional[Path]:
+    """Return path to a LoRA adapter directory if available.
+
+    Resolution order:
+    1) CLI_ADAPTER_PATH env var (absolute or relative to this file)
+    2) Any directory under ../chatbot/nlp_engine containing adapter_config.json
+    3) Prefer names like t5_cli_lora_v5*
+    """
+    base = Path(__file__).resolve().parent
+    env_path = os.getenv("CLI_ADAPTER_PATH")
+    if env_path:
+        p = Path(env_path)
+        if not p.is_absolute():
+            p = base / p
+        if (p / "adapter_config.json").exists():
+            return p
+    # scan recursively for adapter_config.json (handle nested duplicated folder names)
+    nlp_engine_dir = base.parent / "chatbot" / "nlp_engine"
+    if nlp_engine_dir.exists():
+        # prefer v5-named adapters
+        preferred: list[Path] = []
+        others: list[Path] = []
+        for ap in nlp_engine_dir.rglob("adapter_config.json"):
+            cand = ap.parent
+            name = cand.name.lower()
+            if "v5" in name or "lora_v5" in name:
+                preferred.append(cand)
+            else:
+                others.append(cand)
+        if preferred:
+            return preferred[0]
+        if others:
+            return others[0]
+    return None
 
 
 def _lazy_load():
@@ -82,6 +132,68 @@ def _lazy_load():
         if _MODEL is not None:
             return
         global _CHOSEN_MODEL_DIR
+        # Try adapter-based loading first if adapter present and peft available
+        adapter_dir = _find_adapter_dir()
+        if adapter_dir and _PEFT_AVAILABLE:
+            base_hint = os.getenv("CLI_BASE_MODEL_PATH")
+            base_model: Optional[Path] = None
+            if base_hint:
+                bh = Path(base_hint)
+                if not bh.is_absolute():
+                    bh = Path(__file__).resolve().parent / bh
+                base_model = bh
+            else:
+                # Reuse any available full model dir (legacy v3) as base to avoid downloads
+                try:
+                    base_model = _select_model_dir()
+                except Exception:
+                    base_model = None
+
+            if base_model and (base_model / "config.json").exists():
+                _CHOSEN_MODEL_DIR = adapter_dir
+                print(f"[nlp_model] Loading base model from {base_model} with adapter {adapter_dir}")
+                _TOKENIZER = AutoTokenizer.from_pretrained(str(base_model))
+                base = T5ForConditionalGeneration.from_pretrained(str(base_model))
+                try:
+                    _MODEL = PeftModel.from_pretrained(base, str(adapter_dir))
+                except TypeError as e:
+                    # Handle unexpected keys in adapter_config by sanitizing
+                    if "unexpected keyword" in str(e) or "got an unexpected keyword" in str(e):
+                        try:
+                            cfg_path = Path(adapter_dir) / "adapter_config.json"
+                            with open(cfg_path, "r", encoding="utf-8") as f:
+                                cfg = json.load(f)
+                            allowed = set(getattr(LoraConfig, "__dataclass_fields__", {}).keys())
+                            sanitized = {k: v for k, v in cfg.items() if k in allowed}
+                            # Ensure mandatory defaults if missing
+                            if "task_type" not in sanitized and "task_type" in cfg:
+                                sanitized["task_type"] = cfg["task_type"]
+                            temp_dir = Path(tempfile.mkdtemp(prefix="adapter_sanitized_"))
+                            # write sanitized config
+                            with open(temp_dir / "adapter_config.json", "w", encoding="utf-8") as out:
+                                json.dump(sanitized, out)
+                            # copy weights
+                            for wname in ("adapter_model.safetensors", "adapter_model.bin"):
+                                src = Path(adapter_dir) / wname
+                                if src.exists():
+                                    shutil.copy2(src, temp_dir / wname)
+                            print(f"[nlp_model] Using sanitized adapter config at {temp_dir}")
+                            _MODEL = PeftModel.from_pretrained(base, str(temp_dir))
+                        except Exception as se:
+                            raise se
+                    else:
+                        raise
+                device = os.getenv("CLI_MODEL_DEVICE", "cpu")
+                _MODEL.to(device)
+                _MODEL.eval()
+                print(f"[nlp_model] Adapter model loaded on device={device}")
+                return
+            else:
+                # If adapter exists but no local base, do not auto-download; instruct via error in predict
+                _CHOSEN_MODEL_DIR = adapter_dir
+                _TOKENIZER = None  # will error later with guidance
+                _MODEL = None
+        # Fallback: full model directory
         _CHOSEN_MODEL_DIR = _select_model_dir()
         print(f"[nlp_model] Loading model from {_CHOSEN_MODEL_DIR}")
         _TOKENIZER = AutoTokenizer.from_pretrained(str(_CHOSEN_MODEL_DIR))
@@ -104,8 +216,15 @@ def predict_cli(query: str) -> str:
     except Exception as e:
         # Include candidate dirs in error for easier debugging
         candidates = [str(p) for p in _candidate_model_dirs()]
-        return f"[Error] Model load failed: {e} | tried: {candidates}"
+        return f"[Error] Model load failed: {e} | tried full models: {candidates}"
     try:
+        if _MODEL is None or _TOKENIZER is None:
+            # Provide explicit guidance if adapter was found but base missing
+            adapter_dir = _find_adapter_dir()
+            return (
+                f"[Error] Model not initialized. If using LoRA adapter, set CLI_BASE_MODEL_PATH to a local base T5 "
+                f"directory matching the adapter and ensure adapter at {adapter_dir} is valid."
+            )
         inputs = _TOKENIZER(
             query.strip(),
             return_tensors="pt",

@@ -1,4 +1,16 @@
 {
-  "INVIJB1SW1": { "host": "192.168.10.1", "username": "admin", "password": "cisco", "device_type": "cisco_ios" }
-
+  "INVIJB1SW1": {
+    "host": "192.168.10.1",
+    "username": "admin",
+    "password": "cisco",
+    "device_type": "cisco_ios",
+    "port": 22
+  },
+  "UKLONB1SW2": {
+    "host": "192.168.30.1",
+    "username": "admin",
+    "password": "Preetham",
+    "device_type": "cisco_ios",
+    "port": 22
+  }
 }
