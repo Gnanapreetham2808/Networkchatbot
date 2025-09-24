@@ -13,11 +13,12 @@ except Exception:
     paramiko = None  # fallback if not available
 
 from netops_backend.nlp_model import predict_cli
+from .models import Conversation, Message
 try:
-    from Devices.device_resolver import resolve_device  # Devices folder at project root
+    from Devices.device_resolver import resolve_device, find_device_by_host, get_devices  # Devices folder at project root
 except ModuleNotFoundError:
     # Fallback if moved inside project package later
-    from netops_backend.Devices.device_resolver import resolve_device  # type: ignore
+    from netops_backend.Devices.device_resolver import resolve_device, find_device_by_host, get_devices  # type: ignore
 
 # Simple command safety allowlist (read-only)
 SAFE_PREFIXES = (
@@ -46,7 +47,28 @@ class NetworkCommandAPIView(APIView):
         data = getattr(request, 'data', {}) or {}
         query = data.get("query") or (request.query_params.get("query") if hasattr(request, "query_params") else None)
         device_ip = data.get("device_ip") or data.get("ip") or (request.query_params.get("device_ip") if hasattr(request, "query_params") else None)
-        hostname = data.get("hostname") or data.get("device_hostname") or (request.query_params.get("hostname") if hasattr(request, "query_params") else None)
+        # Optional direct alias override
+        device_alias_param = data.get("device_alias") or data.get("alias")
+        hostname = device_alias_param or data.get("hostname") or data.get("device_hostname") or (request.query_params.get("hostname") if hasattr(request, "query_params") else None)
+        session_id = data.get("session_id") or request.headers.get("X-Session-ID")
+
+        conversation = None
+        if session_id:
+            try:
+                conversation = Conversation.objects.filter(id=session_id).first()
+            except Exception:
+                conversation = None
+        if conversation is None and session_id:
+            # Create new conversation with provided UUID if format matches else generate
+            try:
+                # Let UUIDField validate by creating then updating id (simpler: create blank and rely on auto UUID when not provided)
+                conversation = Conversation.objects.create(id=session_id)  # type: ignore[arg-type]
+            except Exception:
+                conversation = Conversation.objects.create()
+                session_id = str(conversation.id)
+        if conversation is None:
+            conversation = Conversation.objects.create()
+            session_id = str(conversation.id)
 
         if not query:
             return Response({"error": "Failed to run command"}, status=400)
@@ -67,33 +89,66 @@ class NetworkCommandAPIView(APIView):
         elif force_ip:
             device_ip = force_ip
 
-        # Resolve device alias from natural language query if explicit device not provided
+        # Always attempt resolution each request; use conversation only when no new hints
         resolved_device_dict = None
-        ambiguity_candidates = []
-        if not device_ip and not hostname:
-            dev_dict, candidates, err = resolve_device(query)
-            if dev_dict:
-                resolved_device_dict = dev_dict
-                device_ip = dev_dict.get("host") or dev_dict.get("ip")
-                hostname = dev_dict.get("alias") or None
-            elif candidates:
-                return Response({"error": "Multiple switches found, please specify one", "candidates": candidates}, status=400)
-            else:
-                # fallback remains: we proceed but connection will likely fail
-                pass
-        else:
-            # If alias specified directly, attempt resolution too for credentials
-            alias_candidate = hostname or device_ip
-            dev_dict, candidates, err = resolve_device(alias_candidate)
-            if dev_dict:
-                resolved_device_dict = dev_dict
-                device_ip = dev_dict.get("host") or dev_dict.get("ip") or device_ip
-            elif candidates:
-                return Response({"error": "Multiple switches found, please specify one", "candidates": candidates}, status=400)
 
-        # Fallback to DEFAULT_DEVICE_ALIAS or DEFAULT_DEVICE_IP from env if still not selected
+        def _has_any_hint(q: str) -> bool:
+            ql = (q or "").lower()
+            return any(k in ql for k in ["vijayawada", "india", "london", "uk", "building 1"]) or bool(hostname)
+
+        dev_dict = None
+        candidates = []
+        err = None
+        # Try explicit alias/hostname first
+        if hostname:
+            dev_dict, candidates, err = resolve_device(hostname)
+        # If no explicit alias or not found, try the query text (location fuzzy matching inside resolver)
+        if not dev_dict:
+            q_to_use = query or ""
+            dev_dict2, candidates2, err2 = resolve_device(q_to_use)
+            if dev_dict2:
+                dev_dict, candidates, err = dev_dict2, [], None
+            elif candidates2:
+                candidates, err = candidates2, err2
+
+        # If the user intends the Vijayawada site (e.g., query includes it) and still no device resolved,
+        # force-select INVIJB1SW1 if available.
+        if not dev_dict and ("vijayawada" in (query or "").lower() or (hostname and str(hostname).upper() == "INVIJB1SW1")):
+            dev_fallback, _, _ = resolve_device("INVIJB1SW1")
+            if dev_fallback:
+                dev_dict = dev_fallback
+
+        if dev_dict:
+            resolved_device_dict = dev_dict
+            device_ip = dev_dict.get("host") or dev_dict.get("ip")
+            hostname = dev_dict.get("alias") or hostname
+        elif candidates:
+            return Response({"error": "Multiple switches found, please specify one", "candidates": candidates, "session_id": session_id}, status=400)
+        else:
+            # No resolution → reuse conversation device if exists, but also restore full device dict
+            if conversation and (conversation.device_host or conversation.device_alias):
+                # Prefer finding by host to pull credentials/type
+                alias_found, dev_by_host = (None, None)
+                if conversation.device_host:
+                    alias_found, dev_by_host = find_device_by_host(conversation.device_host)
+                if dev_by_host:
+                    resolved_device_dict = dev_by_host
+                    device_ip = dev_by_host.get("host")
+                    hostname = dev_by_host.get("alias") or alias_found or conversation.device_alias
+                elif conversation.device_alias:
+                    # Fallback: try resolving by stored alias (handles IP changes)
+                    alias_dev, _, _ = resolve_device(conversation.device_alias)
+                    if alias_dev:
+                        resolved_device_dict = alias_dev
+                        device_ip = alias_dev.get("host") or alias_dev.get("ip")
+                        hostname = alias_dev.get("alias") or conversation.device_alias
+                    else:
+                        hostname = conversation.device_alias
+                        device_ip = conversation.device_host
+
+        # Fallback to DEFAULT_DEVICE_ALIAS or DEFAULT_DEVICE_IP from env if still not selected (UK default behavior)
         if not device_ip:
-            default_alias = os.getenv("DEFAULT_DEVICE_ALIAS")
+            default_alias = os.getenv("DEFAULT_DEVICE_ALIAS") or "UKLONB1SW2"
             default_ip = os.getenv("DEFAULT_DEVICE_IP")
             if default_alias:
                 dev_dict, _, _ = resolve_device(default_alias)
@@ -101,8 +156,17 @@ class NetworkCommandAPIView(APIView):
                     resolved_device_dict = dev_dict
                     device_ip = dev_dict.get("host") or dev_dict.get("ip")
                     hostname = dev_dict.get("alias") or default_alias
+                    print(f"[NetworkCommandAPIView] default alias fallback -> {default_alias} {device_ip}")
             elif default_ip:
                 device_ip = default_ip
+                print(f"[NetworkCommandAPIView] default IP fallback -> {default_ip}")
+
+        # If we have only an IP at this point (e.g., forced or provided) and no resolved dict, try to map it to a known device
+        if device_ip and not resolved_device_dict:
+            alias_found, dev_by_host = find_device_by_host(device_ip)
+            if dev_by_host:
+                resolved_device_dict = dev_by_host
+                hostname = dev_by_host.get("alias") or alias_found or hostname
 
         # Enforce blocks: if resolved to a blocked IP or alias, reroute to default/forced alias or error
         if device_ip and device_ip in blocked_ips:
@@ -118,22 +182,22 @@ class NetworkCommandAPIView(APIView):
                 return Response({"error": "Target device is blocked"}, status=400)
 
 
-        print(f"[NetworkCommandAPIView] query={query!r} target={device_ip} alias_host={hostname}")
+        print(f"[NetworkCommandAPIView] query={query!r} session={session_id} target={device_ip} alias_host={hostname}")
 
         if not device_ip:
-            return Response({"error": "Failed to run command"}, status=400)
+            return Response({"error": "Failed to run command", "session_id": session_id}, status=400)
 
         cli_command = predict_cli(query)
         print(f"[NetworkCommandAPIView] predicted_cli={cli_command}")
         if not cli_command or cli_command.startswith("[Error]"):
-            return Response({"error": "Failed to run command"}, status=500)
+            return Response({"error": "Failed to run command", "session_id": session_id}, status=500)
 
         lc = cli_command.strip().lower()
         # Enforce read-only by default
         if not any(lc.startswith(p) for p in SAFE_PREFIXES):
-            return Response({"error": "Command not allowed", "command": cli_command}, status=400)
+            return Response({"error": "Command not allowed", "command": cli_command, "session_id": session_id}, status=400)
         if any(b in lc for b in BLOCKED_SUBSTRINGS):
-            return Response({"error": "Command blocked for safety", "command": cli_command}, status=400)
+            return Response({"error": "Command blocked for safety", "command": cli_command, "session_id": session_id}, status=400)
 
         # Allow overrides via request (optional) else fall back to env
         req_username = data.get("username")
@@ -174,11 +238,36 @@ class NetworkCommandAPIView(APIView):
             force_telnet = False
             prefer_telnet = False
 
+        # Derive alias (uppercase) for env password lookup if available
+        resolved_alias_upper = None
+        if resolved_device_dict:
+            # attempt alias from dict key if present, else from hostname var
+            # devices.json currently omits explicit alias field, so infer from query resolution
+            resolved_alias_upper = hostname.upper() if hostname else None
+        env_alias_password = None
+        if resolved_alias_upper:
+            env_alias_password = os.getenv(f"DEVICE_{resolved_alias_upper}_PASSWORD")
+
+        password_source = "env-global"
+        chosen_password = (resolved_device_dict or {}).get("password")
+        if chosen_password:
+            password_source = "devices.json"
+        elif req_password:
+            password_source = "request"
+            chosen_password = req_password
+        elif env_alias_password:
+            password_source = f"env-alias:{resolved_alias_upper}"
+            chosen_password = env_alias_password
+        else:
+            chosen_password = env_password
+
+        print(f"[NetworkCommandAPIView] password source -> {password_source}")
+
         ssh_device = {
             "device_type": (resolved_device_dict or {}).get("device_type", "cisco_ios"),
             "host": device_ip,
             "username": (resolved_device_dict or {}).get("username") or req_username or env_username,
-            "password": (resolved_device_dict or {}).get("password") or req_password or env_password,
+            "password": chosen_password,
             "secret": (resolved_device_dict or {}).get("secret") or (req_secret if req_secret is not None else env_secret),
             "fast_cli": True,
             "timeout": conn_timeout,
@@ -242,7 +331,7 @@ class NetworkCommandAPIView(APIView):
                     output = self._run_command_legacy_ssh(
                         device_ip,
                         (resolved_device_dict or {}).get("username") or req_username or env_username,
-                        (resolved_device_dict or {}).get("password") or req_password or env_password,
+                        chosen_password,
                         cli_command,
                         port=22,
                         conn_timeout=conn_timeout,
@@ -273,7 +362,55 @@ class NetworkCommandAPIView(APIView):
             except Exception:
                 pass
 
-        return Response({"output": output}, status=200)
+        # Persist conversation state
+        if conversation:
+            updated = False
+            if hostname and (conversation.device_alias != hostname or conversation.device_host != device_ip):
+                conversation.device_alias = hostname
+                conversation.device_host = device_ip
+                updated = True
+            conversation.last_command = cli_command
+            if updated:
+                conversation.save(update_fields=["device_alias", "device_host", "last_command", "updated_at"])
+            else:
+                conversation.save(update_fields=["last_command", "updated_at"])
+            Message.objects.create(conversation=conversation, role=Message.ROLE_USER, content=query)
+            Message.objects.create(conversation=conversation, role=Message.ROLE_ASSISTANT, content=cli_command, meta="CLI_OUTPUT")
+
+        # Flexible response modes
+        # Default: minimal JSON with raw output only (legacy behavior the user requested)
+        # ?structured=1 or body {"structured": true} => full structured payload
+        # ?text=1 or body {"text": true} => plain text (text/plain) raw output only
+        qp = getattr(request, "query_params", {})
+        want_structured = False
+        want_text = False
+        try:
+            if "structured" in data or (hasattr(qp, 'get') and qp.get("structured") is not None):
+                want_structured = _truthy(data.get("structured") if "structured" in data else qp.get("structured"))
+            if "full" in data or (hasattr(qp, 'get') and qp.get("full") is not None):
+                # alias for structured
+                want_structured = want_structured or _truthy(data.get("full") if "full" in data else qp.get("full"))
+            if "text" in data or (hasattr(qp, 'get') and qp.get("text") is not None):
+                want_text = _truthy(data.get("text") if "text" in data else qp.get("text"))
+        except Exception:
+            pass
+
+        if want_text and not want_structured:
+            # Return plain text response
+            from django.http import HttpResponse
+            return HttpResponse(output, content_type="text/plain; charset=utf-8", status=200)
+
+        if want_structured:
+            return Response({
+                "session_id": session_id,
+                "device_alias": hostname,
+                "device_host": device_ip,
+                "cli_command": cli_command,
+                "raw_output": output,
+            }, status=200)
+
+        # Minimal JSON (raw output only)
+        return Response({"output": output, "device_alias": hostname, "device_host": device_ip, "session_id": session_id}, status=200)
 
     def _run_command_legacy_ssh(self, host: str, username: str, password: str, command: str, port: int = 22,
                                  conn_timeout: float = 8.0, auth_timeout: float = 10.0) -> str:
@@ -293,14 +430,22 @@ class NetworkCommandAPIView(APIView):
         s = socket.create_connection((host, port), timeout=conn_timeout)
         t = paramiko.Transport(s)
         so = t.get_security_options()
-        if ciphers:
-            so.ciphers = tuple(ciphers)
-        if kex:
-            so.kex = tuple(kex)
-        if macs:
-            so.macs = tuple(macs)
-        if key_types:
-            so.key_types = tuple(key_types)
+        # Older Paramiko builds (or stripped versions) may lack some attributes (e.g. macs)
+        def _safe_set(attr: str, values):
+            if not values:
+                return
+            if hasattr(so, attr):
+                try:
+                    setattr(so, attr, tuple(values))
+                except Exception as e:  # pragma: no cover
+                    print(f"[legacy ssh] failed setting {attr}: {e}")
+            else:  # pragma: no cover
+                print(f"[legacy ssh] skipping unsupported security option: {attr}")
+
+        _safe_set("ciphers", ciphers)
+        _safe_set("kex", kex)
+        _safe_set("macs", macs)
+        _safe_set("key_types", key_types)
 
         t.start_client(timeout=auth_timeout)
         t.auth_password(username=username, password=password)
