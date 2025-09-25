@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { FiSend, FiUser, FiCpu } from 'react-icons/fi';
+import { motion, AnimatePresence } from 'framer-motion';
 
 type ChatMessage = {
   id: string;
@@ -18,6 +19,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string>('');
+  const [currentDevice, setCurrentDevice] = useState<{ alias?: string; host?: string } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000/api/nlp/network-command/';
 
@@ -30,6 +33,22 @@ export default function ChatPage() {
       router.push('/login');
     }
   }, [loading, user, router]);
+
+  // Ensure a stable session_id across requests
+  useEffect(() => {
+    try {
+      const key = 'netops_session_id';
+      let sid = localStorage.getItem(key);
+      if (!sid) {
+        sid = crypto.randomUUID();
+        localStorage.setItem(key, sid);
+      }
+      setSessionId(sid);
+    } catch (e) {
+      // Fallback if crypto/localStorage unavailable
+      setSessionId(String(Date.now()));
+    }
+  }, []);
 
   const formatTime = (date: Date) =>
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -56,7 +75,7 @@ export default function ChatPage() {
       const res = await fetch(BACKEND_URL, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ device_ip: '192.168.10.1', query: trimmed })
+        body: JSON.stringify({ session_id: sessionId, query: trimmed })
       });
 
       let botText = '';
@@ -65,7 +84,14 @@ export default function ChatPage() {
         botText = `Error: ${err.error || res.status}`;
       } else {
         const data = await res.json();
-        botText = data.output || data.warning || JSON.stringify(data, null, 2);
+        botText = data.output || data.warning || data.raw_output || JSON.stringify(data, null, 2);
+        if (data.device_alias || data.device_host) {
+          setCurrentDevice({ alias: data.device_alias, host: data.device_host });
+        }
+        if (data.session_id && data.session_id !== sessionId) {
+          setSessionId(data.session_id);
+          try { localStorage.setItem('netops_session_id', data.session_id); } catch {}
+        }
       }
 
       const botMessage: ChatMessage = {
@@ -96,8 +122,18 @@ export default function ChatPage() {
     <div className="min-h-screen bg-[#f5f7fa] flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-3xl bg-white rounded-2xl shadow-xl flex flex-col overflow-hidden border border-gray-200">
         {/* Header */}
-        <div className="bg-blue-700 px-6 py-4 text-lg font-semibold text-white border-b">
-          💬 Network Assistant
+        <div className="bg-blue-700 px-6 py-4 text-lg font-semibold text-white border-b flex items-center justify-between">
+          <span>💬 Network Assistant</span>
+          {currentDevice && (currentDevice.alias || currentDevice.host) && (
+            <motion.span
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="text-xs bg-white/15 px-2 py-1 rounded-full"
+              title={currentDevice.host}
+            >
+              {currentDevice.alias || 'Device'}{currentDevice.host ? ` (${currentDevice.host})` : ''}
+            </motion.span>
+          )}
         </div>
 
         {/* Chat messages */}
@@ -111,32 +147,43 @@ export default function ChatPage() {
             </div>
           )}
 
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`rounded-xl px-4 py-3 text-sm whitespace-pre-wrap max-w-xs shadow-md ${
-                  msg.sender === 'user'
-                    ? 'bg-emerald-500 text-white rounded-br-none'
-                    : 'bg-blue-100 text-gray-800 rounded-bl-none'
-                }`}
+          <AnimatePresence initial={false}>
+            {messages.map((msg) => (
+              <motion.div
+                key={msg.id}
+                className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                transition={{ type: 'spring', stiffness: 260, damping: 22 }}
               >
-                <div className="text-xs opacity-60 mb-1 flex items-center gap-1">
-                  {msg.sender === 'user' ? <FiUser size={14} /> : <FiCpu size={14} />}
-                  {formatTime(msg.timestamp)}
+                <div
+                  className={`rounded-xl px-4 py-3 text-sm whitespace-pre-wrap max-w-xs shadow-md ${
+                    msg.sender === 'user'
+                      ? 'bg-emerald-500 text-white rounded-br-none'
+                      : 'bg-blue-100 text-gray-800 rounded-bl-none'
+                  }`}
+                >
+                  <div className="text-xs opacity-60 mb-1 flex items-center gap-1">
+                    {msg.sender === 'user' ? <FiUser size={14} /> : <FiCpu size={14} />}
+                    {formatTime(msg.timestamp)}
+                  </div>
+                  {msg.content}
                 </div>
-                {msg.content}
-              </div>
-            </div>
-          ))}
+              </motion.div>
+            ))}
+          </AnimatePresence>
 
           {isLoading && (
             <div className="flex justify-start">
-              <div className="bg-blue-100 text-gray-800 px-4 py-3 rounded-xl text-sm shadow">
+              <motion.div
+                className="bg-blue-100 text-gray-800 px-4 py-3 rounded-xl text-sm shadow"
+                initial={{ opacity: 0.6 }}
+                animate={{ opacity: [0.6, 1, 0.6] }}
+                transition={{ duration: 1.2, repeat: Infinity }}
+              >
                 Bot is typing...
-              </div>
+              </motion.div>
             </div>
           )}
 
@@ -156,9 +203,11 @@ export default function ChatPage() {
             className="flex-1 px-4 py-2 rounded-full bg-gray-100 text-gray-900 placeholder-gray-400 border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none"
             disabled={isLoading}
           />
-          <button
+          <motion.button
             type="submit"
             disabled={!input.trim() || isLoading}
+            whileTap={{ scale: 0.95 }}
+            whileHover={!isLoading && input.trim() ? { scale: 1.05 } : {}}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition ${
               !input.trim() || isLoading
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
@@ -166,7 +215,7 @@ export default function ChatPage() {
             }`}
           >
             <FiSend />
-          </button>
+          </motion.button>
         </form>
       </div>
     </div>
