@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { FiSend, FiUser, FiCpu } from 'react-icons/fi';
 import { motion, AnimatePresence } from 'framer-motion';
+import { DeviceChip } from '@/components/ui/DeviceChip';
+import MagneticButton from '@/components/ui/MagneticButton';
 
 type ChatMessage = {
   id: string;
@@ -21,6 +23,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string>('');
   const [currentDevice, setCurrentDevice] = useState<{ alias?: string; host?: string } | null>(null);
+  const [hasFirstResponse, setHasFirstResponse] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000/api/nlp/network-command/';
 
@@ -87,6 +90,7 @@ export default function ChatPage() {
         botText = data.output || data.warning || data.raw_output || JSON.stringify(data, null, 2);
         if (data.device_alias || data.device_host) {
           setCurrentDevice({ alias: data.device_alias, host: data.device_host });
+          if (!hasFirstResponse) setHasFirstResponse(true);
         }
         if (data.session_id && data.session_id !== sessionId) {
           setSessionId(data.session_id);
@@ -122,18 +126,9 @@ export default function ChatPage() {
     <div className="min-h-screen bg-[#f5f7fa] flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-3xl bg-white rounded-2xl shadow-xl flex flex-col overflow-hidden border border-gray-200">
         {/* Header */}
-        <div className="bg-blue-700 px-6 py-4 text-lg font-semibold text-white border-b flex items-center justify-between">
+        <div className="bg-blue-700 px-6 py-4 text-lg font-semibold text-white border-b flex items-center justify-between gap-3">
           <span>💬 Network Assistant</span>
-          {currentDevice && (currentDevice.alias || currentDevice.host) && (
-            <motion.span
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="text-xs bg-white/15 px-2 py-1 rounded-full"
-              title={currentDevice.host}
-            >
-              {currentDevice.alias || 'Device'}{currentDevice.host ? ` (${currentDevice.host})` : ''}
-            </motion.span>
-          )}
+          <DeviceChip alias={currentDevice?.alias} host={currentDevice?.host} loading={!hasFirstResponse} />
         </div>
 
         {/* Chat messages */}
@@ -203,11 +198,9 @@ export default function ChatPage() {
             className="flex-1 px-4 py-2 rounded-full bg-gray-100 text-gray-900 placeholder-gray-400 border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none"
             disabled={isLoading}
           />
-          <motion.button
+          <MagneticButton
             type="submit"
             disabled={!input.trim() || isLoading}
-            whileTap={{ scale: 0.95 }}
-            whileHover={!isLoading && input.trim() ? { scale: 1.05 } : {}}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition ${
               !input.trim() || isLoading
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
@@ -215,7 +208,7 @@ export default function ChatPage() {
             }`}
           >
             <FiSend />
-          </motion.button>
+          </MagneticButton>
         </form>
       </div>
     </div>
