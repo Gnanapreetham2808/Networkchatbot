@@ -1,6 +1,6 @@
 # Network Chatbot
 
-Network Automation Chatbot: Natural Language to CLI for network devices, with device aliasing, telnet-only execution, and a modern Next.js frontend.
+Natural Language → CLI network automation platform with a Django REST backend, device alias resolution, and a modern Next.js (App Router) frontend. Now includes a resilient globe device‑location API layer with automatic backend path fallbacks.
 
 ## 🚀 Project Overview
 
@@ -11,18 +11,19 @@ This project enables network administrators to interact with devices using natur
 ### ✅ Key Features
 
 - **Backend (Django)**
-  - Natural Language → CLI command conversion (T5 model, local only)
-  - Device aliasing and hostname resolution (JSON inventory)
-  - Telnet-only device execution (Netmiko)
-  - Error handling and ambiguity detection
-  - API endpoint for chat queries
+  - Natural Language → CLI command conversion (local T5 variants)
+  - Device aliasing & hostname resolution (`Devices/device_resolver.py`)
+  - Telnet-only execution (Netmiko) with prompt normalization & noise filtering
+  - Device location aggregation endpoint with coordinate fallbacks
+  - Authentication stub (`MeAPIView`) and extensible RBAC placeholder
+  - Defensive parsing & ambiguity reporting for unsafe/ambiguous commands
 
 - **Frontend (Next.js)**
   - Chat interface for network queries
   - Admin dashboard: device management, logs, users
   - Modern UI with Tailwind CSS
 
-### 🏗️ Project Structure
+### 🏗️ Project Structure (Simplified)
 
 ```
 Networkchatbot/
@@ -74,6 +75,25 @@ npm install
 npm run dev
 ```
 
+## 🌱 Environment Variables
+
+Create `Frontend/.env.local` and (optionally) `Backend/.env` (example names — adapt as needed). Only non‑secret, frontend‑visible vars should be prefixed with `NEXT_PUBLIC_`.
+
+Frontend `.env.local` example:
+```
+NEXT_PUBLIC_BACKEND_BASE=http://localhost:8000
+# Override if backend device locations endpoint is non-standard
+# NEXT_PUBLIC_BACKEND_DEVICE_LOCATIONS_PATH=/device-locations/
+# Optional auto-forward after globe (ms)
+# NEXT_PUBLIC_GLOBE_AUTO_FORWARD_MS=8000
+```
+
+Backend (Django) example `.env` (NOT committed):
+```
+DISABLE_AUTH=1               # For development only
+DEVICES_RELOAD_EACH_REQUEST=0
+```
+
 ## 📦 Dependencies
 
 ### Backend
@@ -84,11 +104,35 @@ npm run dev
 - Paramiko, TextFSM, NTC Templates
 
 ### Frontend
-- Next.js
-- Tailwind CSS
+- Next.js (App Router)
+- Tailwind CSS + class variance utilities
+- SWR for lightweight data fetching
+- Globe visualization: `globe.gl`, `three`
 
-### Globe Visualization (New)
-After authentication, users are redirected to a `/globe` route that renders a 3D Earth using `globe.gl` and `three`. It currently displays a small hard‑coded sample of world cities (see `Frontend/src/components/WorldGlobe.tsx`). Click a city label to smoothly focus it.
+### Globe Visualization & Device Locations
+The `/globe` page renders a 3D Earth (Three.js + `globe.gl`). Device geographic markers come from the frontend API route: `GET /api/device-location?sites=uk,in`.
+
+`/api/device-location` server route logic:
+1. Reads `sites` query (comma-separated aliases or regions).
+2. Tries backend candidates in this order until success:
+  - `NEXT_PUBLIC_BACKEND_DEVICE_LOCATIONS_PATH` (if set)
+  - `/device-locations/`
+  - `/api/nlp/device-locations/`
+  - `/api/device-locations/` (legacy fallback)
+3. Aggregates attempts & timing in `meta` for diagnostics.
+4. Returns:
+  ```json
+  { "locations": [ { "alias": "UKLONB1SW2", "lat": 51.5072, "lng": -0.1276, "label": "UK - London" } ],
+    "meta": { "attempts": [ { "url": "http://localhost:8000/device-locations/?sites=uk,in", "ok": true, "status": 200 } ], "elapsed_ms": 42 } }
+  ```
+5. On failure, differentiates between network (500) and non-OK backend responses (502) with a detailed `attempts` array.
+
+Coordinate fallback: If a device record lacks `lat/lng`, predefined site defaults fill in (see `DeviceLocationAPIView.FALLBACK_COORDS`).
+
+Customization ideas:
+- Replace site detection heuristics with DB-driven inventory.
+- Add arcs for inter-site traffic flows.
+- Layer health metrics or SLA heatmaps.
 
 Customization ideas:
 - Replace the `SAMPLE_CITIES` array with data fetched from an internal API (e.g., device geographic metadata).
@@ -98,12 +142,50 @@ Customization ideas:
 
 Globe code files:
 - Component: `Frontend/src/components/WorldGlobe.tsx`
+- API route: `Frontend/src/app/api/device-location/route.ts`
 - Page: `Frontend/src/app/globe/page.tsx`
 
-If globe isn’t needed in a deployment, you can remove those two files and the dependencies `globe.gl` and `three` from `package.json`.
+If globe isn’t needed, remove those files and drop `globe.gl` & `three` from `package.json`.
 
 Auto-forward option:
 - Set `NEXT_PUBLIC_GLOBE_AUTO_FORWARD_MS=8000` (example) in `Frontend/.env.local` to automatically redirect users from `/globe` to `/chat` after 8 seconds. Leave unset to disable.
+
+## 🧪 Testing (Manual Quick Checks)
+
+Backend health:
+```powershell
+curl http://localhost:8000/device-locations/
+```
+
+Frontend device location API (after `npm run dev`):
+```powershell
+curl http://localhost:3000/api/device-location?sites=uk,in
+```
+
+Expect 200 with `locations` & `meta`. If 502/500, inspect `meta.attempts` URLs.
+
+## 🛠️ Troubleshooting
+
+| Issue | Likely Cause | Fix |
+|-------|--------------|-----|
+| 502 from `/api/device-location` | Wrong backend path or backend returned non-OK | Set `NEXT_PUBLIC_BACKEND_BACKEND_DEVICE_LOCATIONS_PATH` or ensure Django path `/device-locations/` works |
+| 500 from `/api/device-location` | Backend unreachable / network error | Check server running on `localhost:8000` & firewall |
+| Missing `next-server` runtime module | Mixed `"latest"` Next/React versions | Pin stable Next + React in `package.json` |
+| Device lat/lng null | Missing coordinates in inventory | Add coordinates or extend fallback map |
+| Auth always unauthenticated | `DISABLE_AUTH` not set | Use `DISABLE_AUTH=1` for dev, implement real auth later |
+
+## 🧹 Repository Hygiene
+
+- `nautobot-docker-compose/` removed & now ignored to reduce repo size/clutter.
+- Large model artifacts & binary weights are ignored by `.gitignore`.
+- Nested accidental Git repos eliminated.
+
+To fully purge a removed directory from history (optional):
+```powershell
+pip install git-filter-repo
+git filter-repo --path nautobot-docker-compose --invert-paths
+git push --force origin main
+```
 
 ## 🎯 Next Steps
 
@@ -115,11 +197,12 @@ Auto-forward option:
 - Model files are ignored and not pushed to repo
 
 ### Roadmap
-- [ ] Security: authentication, RBAC
-- [ ] Observability: logging, metrics
-- [ ] Device config templates
-- [ ] Real-time monitoring
-- [ ] Automated tests
+- [ ] Security hardening: auth & RBAC
+- [ ] Observability: structured logs + metrics exporter
+- [ ] Automated tests (pytest + React component tests)
+- [ ] Device config templating & change previews
+- [ ] Real-time telemetry (WebSockets / SSE)
+- [ ] Multi-vendor device abstraction layer
 
 ## 🤝 Contributing
 
@@ -132,4 +215,4 @@ MIT License (add details as needed)
 ---
 
 **Status**: 🟡 In Development  
-**Last Updated**: October 1, 2025 (added globe visualization)
+**Last Updated**: October 2, 2025 (device-location API resiliency, repo cleanup)
