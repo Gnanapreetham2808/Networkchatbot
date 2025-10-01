@@ -26,11 +26,11 @@ export default function LoginPage() {
       } else {
         await signIn(email, password);
       }
-      // Post-login routing based on admin status
+      // Post-login routing: always show globe first for non-admin; admin still to dashboard
       if (isAdminMode || isAdmin) {
         router.push('/admin/dashboard');
       } else {
-        router.push('/chat');
+        router.push('/globe');
       }
     } catch (err: any) {
       const code = err?.code || '';

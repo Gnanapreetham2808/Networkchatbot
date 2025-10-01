@@ -84,7 +84,9 @@ function LoginPanel() {
       } else {
         await signIn(email, password);
       }
-      router.refresh(); // trigger auth state update; landing will render below
+      // Redirect directly to the globe visualization after auth
+      router.push('/globe');
+      router.refresh(); // ensure any dependent components re-evaluate auth state
     } catch (err: any) {
       setError(err?.message || 'Authentication failed');
     } finally {
