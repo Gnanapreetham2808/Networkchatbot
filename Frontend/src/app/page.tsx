@@ -198,6 +198,13 @@ export default function HomePage() {
                 Go to Chat
               </button>
             </Link>
+            {user && (
+              <Link href="/get-location">
+                <button className="px-8 py-3 bg-teal-600 text-white rounded-lg font-semibold text-base hover:bg-teal-700 shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 transition-all duration-300 transform hover:scale-105">
+                  Get Location
+                </button>
+              </Link>
+            )}
           </div>
         </motion.div>
       </section>

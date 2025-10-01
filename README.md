@@ -87,6 +87,24 @@ npm run dev
 - Next.js
 - Tailwind CSS
 
+### Globe Visualization (New)
+After authentication, users are redirected to a `/globe` route that renders a 3D Earth using `globe.gl` and `three`. It currently displays a small hard‑coded sample of world cities (see `Frontend/src/components/WorldGlobe.tsx`). Click a city label to smoothly focus it.
+
+Customization ideas:
+- Replace the `SAMPLE_CITIES` array with data fetched from an internal API (e.g., device geographic metadata).
+- Add arcs for traffic flows (use `.arcsData()` in `globe.gl`).
+- Overlay polygons for regions or POP coverage.
+- Add heatmap coloring based on device health metrics.
+
+Globe code files:
+- Component: `Frontend/src/components/WorldGlobe.tsx`
+- Page: `Frontend/src/app/globe/page.tsx`
+
+If globe isn’t needed in a deployment, you can remove those two files and the dependencies `globe.gl` and `three` from `package.json`.
+
+Auto-forward option:
+- Set `NEXT_PUBLIC_GLOBE_AUTO_FORWARD_MS=8000` (example) in `Frontend/.env.local` to automatically redirect users from `/globe` to `/chat` after 8 seconds. Leave unset to disable.
+
 ## 🎯 Next Steps
 
 ### Current Features
@@ -114,4 +132,4 @@ MIT License (add details as needed)
 ---
 
 **Status**: 🟡 In Development  
-**Last Updated**: September 3, 2025
+**Last Updated**: October 1, 2025 (added globe visualization)

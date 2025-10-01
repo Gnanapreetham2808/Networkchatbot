@@ -813,3 +813,63 @@ class MeAPIView(APIView):
             "email": getattr(user, 'email', None),
             "is_admin": getattr(user, 'is_admin', False),
         })
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class DeviceLocationAPIView(APIView):
+    """Return simplified location markers (UK + India) for the globe.
+
+    Optional query param: sites=uk,in  (comma separated)
+    Response: {"locations": [{alias, site, lat, lng, label}]}  (lat/lng may be null if unknown)
+    """
+
+    FALLBACK_COORDS = {
+        "UKLONB1SW2": {"lat": 51.5072, "lng": -0.1276, "label": "UK - London"},
+        "INVIJB1SW1": {"lat": 16.5062, "lng": 80.6480, "label": "India - Vijayawada"},
+    }
+
+    SITE_ALIAS_PREF = {
+        "uk": ["UKLONB1SW2"],
+        "london": ["UKLONB1SW2"],
+        "in": ["INVIJB1SW1"],
+        "india": ["INVIJB1SW1"],
+        "vijayawada": ["INVIJB1SW1"],
+    }
+
+    def get(self, request):
+        devices_map = get_devices()
+        sites_param = getattr(request, 'query_params', {}).get('sites', 'uk,in') if hasattr(request, 'query_params') else 'uk,in'
+        requested_sites = [s.strip().lower() for s in sites_param.split(',') if s.strip()]
+        chosen = []
+        used_aliases = set()
+        for site in requested_sites:
+            prefs = self.SITE_ALIAS_PREF.get(site, [])
+            alias = None
+            for cand in prefs:
+                if cand in devices_map:
+                    alias = cand
+                    break
+            if not alias:
+                if site in ("uk", "london"):
+                    alias = next((a for a in devices_map.keys() if a.startswith("UKLONB")), None) or next((a for a in devices_map.keys() if a.startswith("UK")), None)
+                elif site in ("in", "india", "vijayawada"):
+                    alias = next((a for a in devices_map.keys() if a.startswith("INVIJB1SW")), None) or next((a for a in devices_map.keys() if a.startswith("IN")), None)
+            if not alias or alias in used_aliases:
+                continue
+            used_aliases.add(alias)
+            dev = devices_map.get(alias, {})
+            lat = dev.get("lat") or dev.get("latitude")
+            lng = dev.get("lng") or dev.get("longitude")
+            fb = self.FALLBACK_COORDS.get(alias)
+            if (lat is None or lng is None) and fb:
+                lat = fb["lat"]
+                lng = fb["lng"]
+            label = (fb and fb.get("label")) or alias
+            chosen.append({
+                "alias": alias,
+                "site": site,
+                "lat": lat,
+                "lng": lng,
+                "label": label,
+            })
+        return Response({"locations": chosen}, status=200)
