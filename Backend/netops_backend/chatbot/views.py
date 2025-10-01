@@ -187,6 +187,53 @@ class NetworkCommandAPIView(APIView):
         if not device_ip:
             return Response({"error": "Failed to run command", "session_id": session_id}, status=400)
 
+        # Jump-first strategy: if device defines jump_via and connection_strategy == jump_first, attempt multi-hop immediately
+        jump_first_attempted = False
+        if resolved_device_dict and resolved_device_dict.get("jump_via") and resolved_device_dict.get("connection_strategy") == "jump_first":
+            jump_alias = str(resolved_device_dict.get("jump_via")).upper()
+            jd, _, _ = resolve_device(jump_alias)
+            if jd:
+                try:
+                    print(f"[NetworkCommandAPIView] jump_first strategy -> trying jump via {jump_alias} before direct connect")
+                    output = self._run_via_jump(
+                        jump_device=jd,
+                        target_device=resolved_device_dict,
+                        cli_command=predict_cli(query),  # re-run to ensure same CLI used below if fallback
+                        primary_ip=device_ip,
+                        username=(resolved_device_dict or {}).get("username") or os.getenv("DEVICE_USERNAME", "admin"),
+                        password=(resolved_device_dict or {}).get("password") or os.getenv("DEVICE_PASSWORD", "admin"),
+                        enable_secret=(resolved_device_dict or {}).get("secret") or os.getenv("DEVICE_SECRET", ""),
+                        conn_timeout=float(os.getenv("DEVICE_CONN_TIMEOUT", "8")),
+                    )
+                    # Persist conversation and return early
+                    cli_command = predict_cli(query)
+                    if conversation:
+                        updated = False
+                        if hostname and (conversation.device_alias != hostname or conversation.device_host != (resolved_device_dict.get("host") or device_ip)):
+                            conversation.device_alias = hostname
+                            conversation.device_host = resolved_device_dict.get("host") or device_ip
+                            updated = True
+                        conversation.last_command = cli_command
+                        if updated:
+                            conversation.save(update_fields=["device_alias", "device_host", "last_command", "updated_at"])
+                        else:
+                            conversation.save(update_fields=["last_command", "updated_at"])
+                        Message.objects.create(conversation=conversation, role=Message.ROLE_USER, content=query)
+                        Message.objects.create(conversation=conversation, role=Message.ROLE_ASSISTANT, content=cli_command, meta="CLI_OUTPUT")
+                    return Response({
+                        "output": output,
+                        "device_alias": hostname,
+                        "device_host": resolved_device_dict.get("loopback") or resolved_device_dict.get("host") or device_ip,
+                        "session_id": session_id,
+                        "jump_via": jump_alias,
+                        "cleaned": True,
+                        "strategy": "jump_first",
+                        "connection_method": "jump"
+                    }, status=200)
+                except Exception as e:
+                    print(f"[NetworkCommandAPIView] jump_first initial attempt failed -> {e}; falling back to direct connect")
+                    jump_first_attempted = True
+
         cli_command = predict_cli(query)
         print(f"[NetworkCommandAPIView] predicted_cli={cli_command}")
         if not cli_command or cli_command.startswith("[Error]"):
@@ -325,21 +372,101 @@ class NetworkCommandAPIView(APIView):
                 print("[NetworkCommandAPIView] telnet disabled -> no telnet fallback")
 
         if net_connect is None:
-            # Optional legacy SSH fallback for very old devices
-            if os.getenv("ENABLE_LEGACY_SSH", "1") == "1" and paramiko is not None:
+            # If device has alt_hosts, try them sequentially before giving up
+            alt_hosts = []
+            if resolved_device_dict:
                 try:
-                    output = self._run_command_legacy_ssh(
-                        device_ip,
-                        (resolved_device_dict or {}).get("username") or req_username or env_username,
-                        chosen_password,
-                        cli_command,
-                        port=22,
-                        conn_timeout=conn_timeout,
-                        auth_timeout=auth_timeout,
-                    )
-                    return Response({"output": output, "legacy": True}, status=200)
+                    alt_hosts = resolved_device_dict.get("alt_hosts") or []
+                except Exception:
+                    alt_hosts = []
+            tried_alt = False
+            for alt in alt_hosts:
+                if not alt or alt == device_ip:
+                    continue
+                tried_alt = True
+                print(f"[NetworkCommandAPIView] primary host connect failed -> trying alt host {alt}")
+                ssh_device["host"] = alt
+                telnet_device["host"] = alt
+                try:
+                    net_connect = ConnectHandler(**ssh_device)
+                    if net_connect:
+                        device_ip = alt  # update to working alt
+                        break
                 except Exception as e:
-                    print(f"[NetworkCommandAPIView] legacy ssh failed -> {e}")
+                    last_err = e
+                    print(f"[NetworkCommandAPIView] alt host ssh failed -> {e}")
+            # restore ssh_device host if all failed
+            if net_connect is None:
+                ssh_device["host"] = device_ip
+                telnet_device["host"] = device_ip
+
+        if net_connect is None:
+            # Optional legacy SSH fallback for very old devices (try original then alts)
+            legacy_hosts = [device_ip] + [h for h in (resolved_device_dict.get("alt_hosts") if resolved_device_dict else []) if h != device_ip]
+            if os.getenv("ENABLE_LEGACY_SSH", "1") == "1" and paramiko is not None:
+                for lh in legacy_hosts:
+                    try:
+                        print(f"[NetworkCommandAPIView] legacy ssh attempt host={lh}")
+                        output = self._run_command_legacy_ssh(
+                            lh,
+                            (resolved_device_dict or {}).get("username") or req_username or env_username,
+                            chosen_password,
+                            cli_command,
+                            port=22,
+                            conn_timeout=conn_timeout,
+                            auth_timeout=auth_timeout,
+                        )
+                        device_ip = lh
+                        return Response({"output": output, "legacy": True}, status=200)
+                    except Exception as e:
+                        print(f"[NetworkCommandAPIView] legacy ssh failed host={lh} -> {e}")
+            # Before final failure, attempt jump host (multi-hop) if defined on target
+            jump_used = False
+            jump_alias = None
+            if resolved_device_dict and resolved_device_dict.get("jump_via"):
+                jump_alias = str(resolved_device_dict.get("jump_via")).upper()
+                jd, _, _ = resolve_device(jump_alias)
+                if jd:
+                    print(f"[NetworkCommandAPIView] attempting jump via {jump_alias}")
+                    try:
+                        output = self._run_via_jump(
+                            jump_device=jd,
+                            target_device=resolved_device_dict,
+                            cli_command=cli_command,
+                            primary_ip=device_ip,
+                            username=(resolved_device_dict or {}).get("username") or req_username or env_username,
+                            password=chosen_password,
+                            enable_secret=(resolved_device_dict or {}).get("secret") or (req_secret if req_secret is not None else env_secret),
+                            conn_timeout=conn_timeout,
+                        )
+                        # conversation persistence happens below; override device_ip to target host
+                        jump_used = True
+                        device_ip = resolved_device_dict.get("host") or device_ip
+                        if conversation:
+                            updated = False
+                            if hostname and (conversation.device_alias != hostname or conversation.device_host != device_ip):
+                                conversation.device_alias = hostname
+                                conversation.device_host = device_ip
+                                updated = True
+                            conversation.last_command = cli_command
+                            if updated:
+                                conversation.save(update_fields=["device_alias", "device_host", "last_command", "updated_at"])
+                            else:
+                                conversation.save(update_fields=["last_command", "updated_at"])
+                            Message.objects.create(conversation=conversation, role=Message.ROLE_USER, content=query)
+                            Message.objects.create(conversation=conversation, role=Message.ROLE_ASSISTANT, content=cli_command, meta="CLI_OUTPUT")
+                        resp_payload = {
+                            "output": output,
+                            "device_alias": hostname,
+                            "device_host": (resolved_device_dict.get("loopback") if resolved_device_dict else None) or device_ip,
+                            "session_id": session_id,
+                            "jump_via": jump_alias,
+                            "cleaned": True,
+                            "connection_method": "jump"
+                        }
+                        return Response(resp_payload, status=200)
+                    except Exception as e:
+                        print(f"[NetworkCommandAPIView] jump via {jump_alias} failed -> {e}")
             return Response({"error": "Unable to connect to device"}, status=502)
 
         try:
@@ -410,7 +537,12 @@ class NetworkCommandAPIView(APIView):
             }, status=200)
 
         # Minimal JSON (raw output only)
-        return Response({"output": output, "device_alias": hostname, "device_host": device_ip, "session_id": session_id}, status=200)
+        base_resp = {"output": output, "device_alias": hostname, "device_host": device_ip, "session_id": session_id}
+        if resolved_device_dict and resolved_device_dict.get("jump_via"):
+            base_resp["jump_via"] = resolved_device_dict.get("jump_via")
+            # Heuristic: output already cleaned in jump path; mark flag
+            base_resp["cleaned"] = True
+        return Response(base_resp, status=200)
 
     def _run_command_legacy_ssh(self, host: str, username: str, password: str, command: str, port: int = 22,
                                  conn_timeout: float = 8.0, auth_timeout: float = 10.0) -> str:
@@ -475,6 +607,196 @@ class NetworkCommandAPIView(APIView):
         finally:
             t.close()
         return "".join(output_chunks).strip()
+
+    def _run_via_jump(self, jump_device: dict, target_device: dict, cli_command: str, primary_ip: str,
+                       username: str, password: str, enable_secret: str | None, conn_timeout: float = 8.0) -> str:
+        """Interactive nested SSH (jump -> target) capturing only target command output.
+
+        Process:
+          1. Connect to jump (Netmiko)
+          2. ssh to target loopback/host (prefers loopback)
+          3. Handle fingerprint (yes/no) and password prompts
+          4. Disable paging on target (terminal length 0)
+          5. Execute cli_command
+          6. Read until target prompt reappears
+          7. Sanitize output (remove echoes, prompts, noise)
+        """
+        jump_host = jump_device.get("host")
+        if not jump_host:
+            raise RuntimeError("jump device missing host")
+        target_host = target_device.get("loopback") or target_device.get("host") or primary_ip
+        if not target_host:
+            raise RuntimeError("target device missing host/loopback")
+        target_alias = (target_device.get("alias") or target_device.get("ALIAS") or target_device.get("name") or "").strip() or None
+        jd = {
+            "device_type": jump_device.get("device_type", "cisco_ios"),
+            "host": jump_host,
+            "username": jump_device.get("username") or username,
+            "password": jump_device.get("password") or password,
+            "secret": jump_device.get("secret"),
+            "fast_cli": False,
+            "timeout": conn_timeout,
+            "conn_timeout": conn_timeout,
+            "auth_timeout": conn_timeout,
+            "banner_timeout": 20,
+            "allow_agent": False,
+            "use_keys": False,
+            "port": 22,
+        }
+        net_jump = None
+        try:
+            net_jump = ConnectHandler(**jd)
+            try:
+                if jd.get("secret"):
+                    net_jump.enable()
+            except Exception:
+                pass
+            def _sleep(s=0.35):
+                time.sleep(s)
+            def _read_all(window=0.4):
+                end = time.time() + window
+                buf = []
+                while time.time() < end:
+                    try:
+                        chunk = net_jump.read_channel()
+                    except Exception:
+                        break
+                    if chunk:
+                        buf.append(chunk)
+                        time.sleep(0.05)
+                    else:
+                        time.sleep(0.05)
+                return "".join(buf)
+            jump_prompt = None
+            try:
+                jump_prompt = net_jump.find_prompt().strip()
+            except Exception:
+                pass
+            # Legacy option environment support (mirroring front screenshot requirements)
+            leg_kex = os.getenv("SSH_LEGACY_KEX", "diffie-hellman-group1-sha1")
+            leg_hostkeys = os.getenv("SSH_LEGACY_KEY_TYPES", "ssh-rsa")
+            leg_ciphers = os.getenv("SSH_LEGACY_CIPHERS", "aes128-cbc,3des-cbc,aes192-cbc,aes256-cbc")
+            leg_macs = os.getenv("SSH_LEGACY_MACS", "hmac-sha1,hmac-sha1-96,hmac-md5,hmac-md5-96")
+            # Build -o arguments; some older IOS SSH relay might ignore unsupported ones (harmless)
+            ssh_cmd = (
+                f"ssh -o KexAlgorithms=+{leg_kex} -o HostKeyAlgorithms=+{leg_hostkeys} "
+                f"-o Ciphers=+{leg_ciphers} -o MACs=+{leg_macs} "
+                f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout={int(conn_timeout)} {username}@{target_host}"
+            )
+            net_jump.write_channel(ssh_cmd + "\n")
+            _sleep(0.6)
+            buf = _read_all(0.9)
+            if "Are you sure you want to continue" in buf:
+                net_jump.write_channel("yes\n")
+                _sleep(0.6)
+                buf += _read_all(0.9)
+            # Handle one or more password prompts (some devices might prompt twice on mismatch/latency)
+            pass_tries = 0
+            while "assword" in buf and pass_tries < 3 and "denied" not in buf.lower():
+                net_jump.write_channel(password + "\n")
+                pass_tries += 1
+                _sleep(0.9)
+                buf += _read_all(1.2)
+                # break early if we see a prompt now
+                if any(l.strip().endswith('#') for l in buf.splitlines()):
+                    break
+            # Determine target prompt (must differ from jump prompt). If not, retry with simplified ssh.
+            target_prompt = None
+            for line in buf.splitlines()[::-1]:
+                l = line.strip()
+                if l.endswith('#') and (not jump_prompt or l != jump_prompt):
+                    target_prompt = l
+                    break
+            if not target_prompt:
+                net_jump.write_channel("\n")
+                _sleep(0.5)
+                extra = _read_all(0.6)
+                for line in extra.splitlines()[::-1]:
+                    l = line.strip()
+                    if l.endswith('#') and (not jump_prompt or l != jump_prompt):
+                        target_prompt = l
+                        break
+            if not target_prompt:
+                # Retry with simplified ssh (without legacy options) in case those confuse intermediate platform
+                simple_ssh_cmd = f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{target_host}"
+                net_jump.write_channel(simple_ssh_cmd + "\n")
+                _sleep(0.8)
+                buf2 = _read_all(1.0)
+                if "Are you sure you want to continue" in buf2:
+                    net_jump.write_channel("yes\n")
+                    _sleep(0.6)
+                    buf2 += _read_all(0.8)
+                pass_tries2 = 0
+                while "assword" in buf2 and pass_tries2 < 2 and "denied" not in buf2.lower():
+                    net_jump.write_channel(password + "\n")
+                    pass_tries2 += 1
+                    _sleep(0.9)
+                    buf2 += _read_all(1.2)
+                for line in buf2.splitlines()[::-1]:
+                    l = line.strip()
+                    if l.endswith('#') and (not jump_prompt or l != jump_prompt):
+                        target_prompt = l
+                        break
+            if not target_prompt:
+                target_prompt = '#'
+            # If we have an expected alias, ensure prompt contains it; otherwise abort to avoid running command on jump device
+            if target_alias:
+                if not (target_prompt and target_alias.upper() in target_prompt.upper()):
+                    raise RuntimeError(f"Did not reach target prompt containing alias {target_alias}; got {target_prompt}")
+            # Disable paging
+            net_jump.write_channel("terminal length 0\n")
+            _sleep(0.4)
+            _ = _read_all(0.5)
+            # Run command
+            net_jump.write_channel(cli_command + "\n")
+            _sleep(0.5)
+            collected = []
+            end_time = time.time() + max(conn_timeout, 6)
+            while time.time() < end_time:
+                ch = _read_all(0.5)
+                if ch:
+                    collected.append(ch)
+                    # Only treat as end if prompt resembles target (endswith # and not jump prompt)
+                    if any(ln.strip().endswith('#') and (not jump_prompt or ln.strip() != jump_prompt) for ln in ch.splitlines()):
+                        break
+                else:
+                    time.sleep(0.2)
+            try:
+                net_jump.write_channel("exit\n")
+            except Exception:
+                pass
+            raw_segment = "".join(collected)
+            lines = raw_segment.splitlines()
+            output_lines = []
+            seen_echo = False
+            for ln in lines:
+                s = ln.rstrip()
+                if not s:
+                    continue
+                if not seen_echo and cli_command in s:
+                    seen_echo = True
+                    continue
+                if s.strip().endswith('#') and len(s.strip()) <= len(target_prompt) + 4:
+                    # end
+                    break
+                if s.strip().startswith('% Invalid input'):
+                    continue
+                if s.strip() == ssh_cmd:
+                    continue
+                if jump_prompt and s.strip() == jump_prompt:
+                    continue
+                # Filter timestamp only lines like '01:40 AM'
+                ts = s.replace('AM','').replace('PM','').strip()
+                if ts.count(':') == 1 and ts.replace(':','').replace(' ','').isdigit() and len(ts) <= 8:
+                    continue
+                output_lines.append(s)
+            return "\n".join(output_lines).strip()
+        finally:
+            if net_jump:
+                try:
+                    net_jump.disconnect()
+                except Exception:
+                    pass
 
 
 @method_decorator(csrf_exempt, name="dispatch")

@@ -209,3 +209,10 @@ tokenizer.json
 tokenizer_config.json
 special_tokens_map.json
 generation_config.json
+
+# Local Python virtual environment for Nautobot (avoid committing)
+nautobot-venv/
+
+# If you decide NOT to track the embedded nautobot-docker-compose repository here,
+# uncomment the next line to ignore it. Otherwise convert it to a proper Git submodule.
+# nautobot-docker-compose/

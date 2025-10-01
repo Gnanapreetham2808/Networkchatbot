@@ -54,8 +54,17 @@ def find_device_by_host(host: str) -> Tuple[Optional[str], Optional[dict]]:
         return None, None
     devices = get_devices()
     for alias, dev in devices.items():
-        if str(dev.get("host")) == str(host):
+        primary = str(dev.get("host"))
+        if primary == str(host):
             return alias, _attach_alias(alias, dev)
+        # also look at optional alt_hosts list
+        alt_hosts = dev.get("alt_hosts") or []
+        try:
+            for ah in alt_hosts:
+                if str(ah) == str(host):
+                    return alias, _attach_alias(alias, dev)
+        except Exception:  # pragma: no cover
+            pass
     return None, None
 
 

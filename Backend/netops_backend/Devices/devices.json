@@ -1,12 +1,16 @@
 {
   "INVIJB1SW1": {
-    "host": "192.168.10.1",
+    "host": "10.1.1.1",
+    "alt_hosts": ["192.168.10.1"],
+    "jump_via": "UKLONB1SW2",
+    "loopback": "10.1.1.1",
+  "connection_strategy": "jump_first",
     "username": "admin",
     "device_type": "cisco_ios",
     "password": "cisco",
     "port": 22
   },
-  "UKLONB1SW2": {
+  "UKLONB1SW2": { 
     "host": "192.168.30.1",
     "username": "admin",
     "device_type": "cisco_ios",
