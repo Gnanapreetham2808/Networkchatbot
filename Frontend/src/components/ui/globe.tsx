@@ -40,6 +40,8 @@ export interface GlobeConfig {
   initialPosition?: { lat: number; lng: number };
   autoRotate?: boolean;
   autoRotateSpeed?: number; // degrees per second
+  /** If true, auto-rotation pauses while the user is dragging. Default: false (continuous). */
+  pauseRotationOnDrag?: boolean;
   earthImageUrl?: string; // optional custom earth texture
   showArcEndpoints?: boolean; // show points for arc endpoints
   showLabels?: boolean; // show labels for endpoints
@@ -70,6 +72,8 @@ export function World({ data, globeConfig = {}, className = '', style, markers =
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<any>(null);
   const [size, setSize] = useState<{w:number;h:number}>({w:0,h:0});
+  const [userInteracting, setUserInteracting] = useState(false);
+  const interactionTimeout = useRef<number | null>(null);
 
   // Track container size so we can position markers
   useEffect(() => {
@@ -83,6 +87,7 @@ export function World({ data, globeConfig = {}, className = '', style, markers =
     return () => ro.disconnect();
   }, []);
 
+  // Initialize globe once
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -90,7 +95,6 @@ export function World({ data, globeConfig = {}, className = '', style, markers =
       try {
         const mod: any = await import('globe.gl');
         const createGlobe = mod.default || mod;
-        // derive endpoint points for labels if requested
         const endpoints: any[] = [];
         if (globeConfig.showArcEndpoints !== false || globeConfig.showLabels) {
           const seen = new Set<string>();
@@ -101,14 +105,10 @@ export function World({ data, globeConfig = {}, className = '', style, markers =
             ];
             for (const pt of entries) {
               const key = `${pt.lat.toFixed(3)},${pt.lng.toFixed(3)}`;
-              if (!seen.has(key)) {
-                seen.add(key);
-                endpoints.push(pt);
-              }
+              if (!seen.has(key)) { seen.add(key); endpoints.push(pt); }
             }
           }
         }
-
         const g = createGlobe()(containerRef.current)
           .backgroundColor('rgba(0,0,0,0)')
           .globeImageUrl(globeConfig.earthImageUrl || '//unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
@@ -133,28 +133,9 @@ export function World({ data, globeConfig = {}, className = '', style, markers =
           .labelSize(()=> (globeConfig.labelFontSize || 1.2))
           .labelColor(()=> '#111')
           .labelAltitude(()=>0.04);
-        // Atmosphere / base colors
         if (globeConfig.showAtmosphere !== false) g.showAtmosphere(true); else g.showAtmosphere(false);
         if (globeConfig.atmosphereColor) g.atmosphereColor(globeConfig.atmosphereColor);
         if (globeConfig.atmosphereAltitude) g.atmosphereAltitude(globeConfig.atmosphereAltitude);
-
-        // Auto-rotate
-        if (globeConfig.autoRotate) {
-          const speed = globeConfig.autoRotateSpeed ?? 0.5; // degrees per second approx
-          let last = performance.now();
-          function animate() {
-            if (cancelled) return;
-            const now = performance.now();
-            const dt = (now - last) / 1000;
-            last = now;
-            const pov = g.pointOfView();
-            g.pointOfView({ ...pov, lng: pov.lng + speed * dt });
-            requestAnimationFrame(animate);
-          }
-          requestAnimationFrame(animate);
-        }
-
-        // Initial POV
         if (globeConfig.initialPosition) g.pointOfView({ ...globeConfig.initialPosition, altitude: 1.8 });
         else g.pointOfView({ lat: 20, lng: 0, altitude: 2.2 });
         globeRef.current = g;
@@ -163,7 +144,53 @@ export function World({ data, globeConfig = {}, className = '', style, markers =
       }
     })();
     return () => { cancelled = true; };
-  }, [data, globeConfig]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Separate rotation loop so it continues even if props object identity changes.
+  useEffect(() => {
+    let raf: number;
+    function rotate() {
+      const g = globeRef.current;
+      if (g && (globeConfig.autoRotate ?? true)) { // default to true if undefined
+        // Optionally pause while dragging only if configured
+        if (globeConfig.pauseRotationOnDrag && userInteracting) {
+          raf = requestAnimationFrame(rotate);
+          return;
+        }
+        const speed = (globeConfig.autoRotateSpeed ?? 0.8) / 60; // lng delta per frame approx
+        const pov = g.pointOfView();
+        g.pointOfView({ ...pov, lng: pov.lng + speed });
+      }
+      raf = requestAnimationFrame(rotate);
+    }
+    raf = requestAnimationFrame(rotate);
+    return () => cancelAnimationFrame(raf);
+  }, [globeConfig.autoRotate, globeConfig.autoRotateSpeed, globeConfig.pauseRotationOnDrag, userInteracting]);
+
+  // User interaction detection: pause auto rotate while dragging
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const down = () => {
+      setUserInteracting(true);
+      if (interactionTimeout.current) window.clearTimeout(interactionTimeout.current);
+    };
+    const upLike = () => {
+      if (interactionTimeout.current) window.clearTimeout(interactionTimeout.current);
+      // resume after short idle
+      interactionTimeout.current = window.setTimeout(() => setUserInteracting(false), 2500);
+    };
+    el.addEventListener('pointerdown', down, { passive: true });
+    window.addEventListener('pointerup', upLike, { passive: true });
+    window.addEventListener('pointerleave', upLike, { passive: true });
+    return () => {
+      el.removeEventListener('pointerdown', down);
+      window.removeEventListener('pointerup', upLike);
+      window.removeEventListener('pointerleave', upLike);
+      if (interactionTimeout.current) window.clearTimeout(interactionTimeout.current);
+    };
+  }, []);
 
   // Project lat/lng to 2D screen coords using globe's internal projection (three.js) once initialized.
   // Maintain animated screen positions for markers so they stay fixed on rotating globe.
@@ -231,14 +258,17 @@ export function World({ data, globeConfig = {}, className = '', style, markers =
       top: pos.y + (m.offsetY || 0),
       transform: 'translate(-50%, -50%)',
       zIndex: 50,
-      pointerEvents: 'auto'
+      // Make container transparent to pointer events so drag passes through unless directly on child
+      pointerEvents: 'none'
     };
     return (
       <div key={m.id} style={stylePos}>
         {globeConfig.debugMarkers && (
-          <span className="block w-2 h-2 rounded-full bg-pink-500 absolute -top-1 -left-1 opacity-70" />
+          <span className="block w-2 h-2 rounded-full bg-pink-500 absolute -top-1 -left-1 opacity-70 pointer-events-none" />
         )}
-        {m.render()}
+        <div className="pointer-events-auto">
+          {m.render()}
+        </div>
       </div>
     );
   });

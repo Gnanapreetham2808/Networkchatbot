@@ -10,15 +10,27 @@ interface EffectProps {
 }
 
 /**
- * Effect: A simple layout wrapper that injects the star / sparkles background behind its children.
- * Usage:
- *  <Effect><YourContent /></Effect>
+ * Effect: A layout wrapper that injects the star / sparkles background
+ * and centers children in the viewport.
  */
-export default function Effect({ children, density = 880, starColor = '#5b86ff', pure }: EffectProps) {
+export default function Effect({
+  children,
+  density = 880,
+  starColor = '#5b86ff',
+  pure,
+}: EffectProps) {
   return (
     <div className="relative w-full h-full min-h-screen bg-black text-white overflow-hidden">
-      <GalaxyBackground density={density} starColor={starColor} nebula={!pure} vignette={!pure} />
-      <div className="relative z-10 w-full h-full">{children}</div>
+      <GalaxyBackground
+        density={density}
+        starColor={starColor}
+        nebula={!pure}
+        vignette={!pure}
+      />
+      {/* Centering container */}
+      <div className="relative z-10 w-full h-full flex items-center justify-center">
+        {children}
+      </div>
     </div>
   );
 }

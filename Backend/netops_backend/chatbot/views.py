@@ -14,11 +14,139 @@ except Exception:
 
 from netops_backend.nlp_model import predict_cli
 from .models import Conversation, Message
+import subprocess
+from functools import lru_cache
+from datetime import datetime, timedelta, timezone
 try:
     from Devices.device_resolver import resolve_device, find_device_by_host, get_devices  # Devices folder at project root
 except ModuleNotFoundError:
     # Fallback if moved inside project package later
     from netops_backend.Devices.device_resolver import resolve_device, find_device_by_host, get_devices  # type: ignore
+
+
+# ------------------------------- Device Status Helpers ---------------------------------
+PING_TIMEOUT = float(os.getenv("DEVICE_STATUS_PING_TIMEOUT", "0.8"))  # seconds
+PING_CACHE_TTL = float(os.getenv("DEVICE_STATUS_CACHE_TTL", "15"))  # seconds
+
+@lru_cache(maxsize=256)
+def _cached_ping(host: str) -> tuple[str, float, float]:
+    """Ping host returning (status, latency_ms, cached_at_epoch).
+
+    Uses platform ping command with one echo request. Falls back to socket connect (22) if ping fails.
+    Cached via lru_cache; manual TTL enforcement in caller.
+    """
+    start = time.time()
+    latency_ms = -1.0
+    status_val = "down"
+    # Windows vs *nix command
+    if os.name == 'nt':
+        cmd = ["ping", "-n", "1", "-w", str(int(PING_TIMEOUT*1000)), host]
+    else:
+        cmd = ["ping", "-c", "1", "-W", str(int(PING_TIMEOUT)), host]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=PING_TIMEOUT+0.5)
+        output = proc.stdout.lower()
+        if proc.returncode == 0:
+            # Attempt latency parse
+            # common patterns: time=12.3 ms or time<1ms
+            import re
+            m = re.search(r"time[=<]\s*([0-9]+\.?[0-9]*)\s*ms", output)
+            if m:
+                try:
+                    latency_ms = float(m.group(1))
+                except Exception:
+                    latency_ms = (time.time() - start)*1000
+            else:
+                latency_ms = (time.time() - start)*1000
+            status_val = "up"
+        else:
+            # fallback: TCP connect quick test
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(PING_TIMEOUT)
+                t0 = time.time()
+                sock.connect((host, 22))
+                latency_ms = (time.time() - t0) * 1000
+                status_val = "up"
+            except Exception:
+                pass
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return status_val, latency_ms, time.time()
+
+def ping_host(host: str) -> dict:
+    # Enforce TTL manually because lru_cache has no time expiration.
+    key = (host,)
+    # Access internal cache (not public API but acceptable here for lightweight solution)
+    try:
+        cache = _cached_ping.cache  # type: ignore[attr-defined]
+    except Exception:
+        cache = None
+    status_val: str
+    latency_ms: float
+    ts: float
+    if cache is not None:
+        # rebuild key how lru_cache would (host,) since single arg
+        # Python's internal key building is different; just always call function and rely on TTL enforcement after.
+        pass
+    status_val, latency_ms, ts = _cached_ping(host)
+    # If stale, bust and recompute
+    if (time.time() - ts) > PING_CACHE_TTL:
+        try:
+            _cached_ping.cache_clear()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        status_val, latency_ms, ts = _cached_ping(host)
+    return {
+        "status": status_val,
+        "latency_ms": None if latency_ms < 0 else round(latency_ms, 2),
+        "checked_at": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+    }
+
+class DeviceStatusAPIView(APIView):
+    """GET /device-status/ -> list of devices with reachability and latency.
+
+    Optional query params:
+      alias=ALIAS1,ALIAS2  (filter subset)
+    """
+    def get(self, request):  # type: ignore[override]
+        devices = get_devices() or {}
+        alias_filter = request.GET.get("alias")
+        subset = None
+        if alias_filter:
+            wanted = {a.strip().upper() for a in alias_filter.split(",") if a.strip()}
+            subset = {k:v for k,v in devices.items() if k.upper() in wanted}
+        devs = subset if subset is not None else devices
+        results = []
+        for alias, info in devs.items():
+            host = info.get("host") or info.get("ip")
+            if not host:
+                results.append({
+                    "alias": alias,
+                    "name": info.get("name") or alias,
+                    "host": None,
+                    "status": "unknown",
+                    "latency_ms": None,
+                    "checked_at": None
+                })
+                continue
+            ping_data = ping_host(str(host))
+            results.append({
+                "alias": alias,
+                "name": info.get("name") or alias,
+                "host": host,
+                **ping_data
+            })
+        return Response({
+            "count": len(results),
+            "devices": results,
+            "cache_ttl_seconds": PING_CACHE_TTL,
+        }, status=200)
 
 # Simple command safety allowlist (read-only)
 SAFE_PREFIXES = (

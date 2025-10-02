@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { motion } from "framer-motion";
@@ -50,13 +50,66 @@ export default function GetLocationGlobePage() {
     }
   }
 
+  // Track POV altitude from globe
+  const globeAltitudeRef = useRef(2.2);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      // @ts-ignore
+      const maybe = (window as any).__WORLD_GLOBE_POV__;
+      if (maybe && typeof maybe.altitude === 'number') globeAltitudeRef.current = maybe.altitude;
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const markers = locations.map(l => ({
     id: l.alias,
     lat: l.lat,
     lng: l.lng,
-    render: () => (
-      <Link href="/chat" className={`px-3 py-1 rounded-md text-xs md:text-sm font-medium shadow-lg border backdrop-blur-sm ${l.site.startsWith('uk') ? 'bg-indigo-600 hover:bg-indigo-500 border-indigo-300/40' : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-300/40'}`}>{(l.label||'SITE').split(' ')[0].toUpperCase()}</Link>
-    )
+    render: () => {
+      const short = (l.label || 'SITE').split(' ')[0].toUpperCase();
+      const country = l.site.startsWith('uk') ? 'GB' : (['in','india','vijayawada'].includes(l.site) ? 'IN' : short.slice(0,2));
+      const baseColor = l.site.startsWith('uk') ? 'indigo' : 'emerald';
+      const alt = globeAltitudeRef.current;
+      const scale = Math.min(1.25, Math.max(0.75, 2.2 / (alt || 2.2)));
+      return (
+        <Link
+          href="/chat"
+          aria-label={`Open chat for location ${l.label}`}
+          title={l.label}
+          className={`group marker-item relative inline-flex items-center gap-1 px-3 py-1 rounded-md text-[10px] md:text-xs font-semibold border backdrop-blur-sm tracking-wide overflow-hidden
+            bg-${baseColor}-700/90 hover:bg-${baseColor}-600 border-${baseColor}-300/40 text-${baseColor}-50 transition-transform`} style={{
+            textShadow: '0 1px 2px rgba(0,0,0,0.6)',
+            transform: `translateZ(0) scale(${scale})`
+          }}
+          onClick={(e) => {
+            const target = e.currentTarget;
+            const ripple = document.createElement('span');
+            ripple.className = 'absolute inset-0 animate-ping rounded-md bg-white/20 pointer-events-none';
+            target.appendChild(ripple);
+            setTimeout(()=> ripple.remove(), 500);
+          }}
+        >
+          {/* Halo */}
+          <span className="absolute -inset-1 rounded-md bg-gradient-to-br from-white/30 via-white/10 to-transparent opacity-40 blur-md pointer-events-none"></span>
+          {/* Inner glowing dot */}
+          <span className="relative w-1.5 h-1.5 rounded-full bg-white/90 shadow-inner shadow-black/40" />
+          {/* Country initials */}
+          <span className="relative font-bold tracking-wider">
+            {country}
+          </span>
+          {/* Short label */}
+          <span className="relative hidden sm:inline">{short}</span>
+          {/* Tooltip */}
+          <span
+            className="pointer-events-none opacity-0 group-hover:opacity-100 group-focus:opacity-100 transition-opacity absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50 whitespace-nowrap text-[10px] md:text-xs font-medium px-2.5 py-1.5 rounded-md bg-slate-900/90 backdrop-blur border border-slate-600/40 shadow-lg text-slate-100"
+          >
+            <span className="block text-[11px] font-semibold mb-0.5 tracking-wide">{l.label}</span>
+            <span className="block text-[10px] text-slate-300">Alias: {l.alias}</span>
+            <span className="block text-[10px] text-slate-400">{l.lat.toFixed(2)}, {l.lng.toFixed(2)}</span>
+          </span>
+        </Link>
+      );
+    }
   }));
 
   const globeConfig = {
@@ -75,43 +128,78 @@ export default function GetLocationGlobePage() {
     pointLight: "#ffffff",
     arcTime: 1400,
     arcLength: 0.85,
-    initialPosition: { lat: 35, lng: 30 }, // centers roughly between UK & India
+    initialPosition: { lat: 35, lng: 30 },
     autoRotate: true,
     autoRotateSpeed: 1.1,
-    showLabels: true,
+    showLabels: false,
     labelFontSize: 1.6,
     showArcEndpoints: true,
     markerAltitude: 0.01
   } as const;
 
   return (
-    <main className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-black text-white">
-      <motion.div initial={{opacity:0,y:-20}} animate={{opacity:1,y:0}} transition={{duration:1}} className="z-10 mb-6 text-center px-4">
-        <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 via-sky-300 to-emerald-300">Network Locations</h1>
-        <p className="mt-2 text-sm md:text-base text-slate-300 max-w-xl mx-auto">Current active network endpoints visualized on the globe. Click a location to open the chat.</p>
-        {loading && <p className="mt-2 text-xs text-slate-400">Loading locations...</p>}
-        {error && !loading && <p className="mt-2 text-xs text-red-400">Failed to load locations: {error}</p>}
-      </motion.div>
-      <div className="relative w-full max-w-5xl aspect-square md:h-[650px] md:aspect-auto flex items-center justify-center">
-        <div className="relative w-full h-full rounded-xl border border-white/10 bg-black/40 backdrop-blur-sm shadow-2xl overflow-hidden">
-          <World data={sampleArcs} globeConfig={globeConfig} markers={markers} />
+    <div className="text-white bg-gradient-to-b from-slate-950 via-slate-900 to-black">
+      {/* Hero / Globe Section */}
+      <section className="relative mx-auto w-full max-w-7xl min-h-[calc(100vh-4rem)] flex flex-col items-center justify-center px-4">
+        <motion.div
+          initial={{opacity:0,y:-8}}
+          animate={{opacity:1,y:0}}
+          transition={{duration:0.6}}
+          className="text-center max-w-3xl mx-auto z-10 mb-6"
+        >
+          <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 via-sky-300 to-emerald-300">
+            Network Locations
+          </h1>
+          <p className="mt-2 text-sm md:text-base text-slate-300">
+            Current active network endpoints visualized on the globe. Click a location to open the chat.
+          </p>
+          {loading && <p className="mt-2 text-xs text-slate-400">Loading locations...</p>}
+          {error && !loading && <p className="mt-2 text-xs text-red-400">Failed: {error}</p>}
+        </motion.div>
+
+        <div className="relative w-full max-w-[780px] aspect-square">
+          <World data={sampleArcs} globeConfig={globeConfig} markers={markers} className="w-full h-full" />
         </div>
-      </div>
-      <div className="z-10 mt-10 grid gap-4 grid-cols-1 md:grid-cols-2 w-full max-w-3xl px-6">
-        {locations.map(l => (
-          <Link key={l.alias} href="/chat" className={`group border rounded-lg px-5 py-4 transition shadow flex items-center justify-between ${l.site.startsWith('uk') ? 'border-indigo-400/30 bg-indigo-900/30 hover:bg-indigo-800/40' : 'border-emerald-400/30 bg-emerald-900/30 hover:bg-emerald-800/40'}`}>
-            <div>
-              <p className={`text-xs uppercase tracking-wider ${l.site.startsWith('uk') ? 'text-indigo-300/80' : 'text-emerald-300/80'}`}>Location</p>
-              <p className="text-base font-semibold">{l.label}</p>
+      </section>
+
+      {/* Cards Section */}
+      <section className="w-full max-w-5xl mx-auto pb-14 px-6 -mt-4">
+        <h2 className="sr-only">Locations List</h2>
+        <div className="grid gap-5 grid-cols-1 sm:grid-cols-2">
+          {locations.map(l => (
+            <Link
+              key={l.alias}
+              href="/chat"
+              className={`group border rounded-lg px-5 py-4 transition shadow flex items-center justify-between backdrop-blur-sm ${
+                l.site.startsWith('uk')
+                  ? 'border-indigo-400/30 bg-indigo-900/30 hover:bg-indigo-800/40'
+                  : 'border-emerald-400/30 bg-emerald-900/30 hover:bg-emerald-800/40'
+              }`}
+            >
+              <div>
+                <p className={`text-[11px] uppercase tracking-wider mb-1 ${
+                  l.site.startsWith('uk') ? 'text-indigo-300/80' : 'text-emerald-300/80'
+                }`}>
+                  Location
+                </p>
+                <p className="text-sm font-semibold leading-tight">{l.label}</p>
+              </div>
+              <span className={`text-[11px] font-medium px-3 py-1 rounded-md ${
+                l.site.startsWith('uk')
+                  ? 'bg-indigo-600 group-hover:bg-indigo-500'
+                  : 'bg-emerald-600 group-hover:bg-emerald-500'
+              } transition`}>
+                Open Chat
+              </span>
+            </Link>
+          ))}
+          {!loading && locations.length === 0 && (
+            <div className="col-span-full text-center text-xs text-slate-400">
+              No locations available.
             </div>
-            <span className={`text-xs font-medium px-3 py-1 rounded-md ${l.site.startsWith('uk') ? 'bg-indigo-600 group-hover:bg-indigo-500' : 'bg-emerald-600 group-hover:bg-emerald-500'} transition`}>Open Chat</span>
-          </Link>
-        ))}
-        {!loading && locations.length === 0 && (
-          <div className="col-span-full text-center text-xs text-slate-400">No locations available.</div>
-        )}
-      </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/80 to-transparent" />
-    </main>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
