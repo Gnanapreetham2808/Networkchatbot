@@ -123,18 +123,18 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f7fa] flex items-center justify-center px-4 py-10">
-      <div className="w-full max-w-3xl bg-white rounded-2xl shadow-xl flex flex-col overflow-hidden border border-gray-200">
+    <div className="min-h-screen flex items-center justify-center px-4 py-10 bg-[#f5f7fa] dark:bg-gray-950 transition-colors">
+      <div className="w-full max-w-3xl bg-white dark:bg-gray-900 rounded-2xl shadow-xl flex flex-col overflow-hidden border border-gray-200 dark:border-gray-700">
         {/* Header */}
-        <div className="bg-blue-700 px-6 py-4 text-lg font-semibold text-white border-b flex items-center justify-between gap-3">
+  <div className="bg-blue-700 dark:bg-blue-600 px-6 py-4 text-lg font-semibold text-white border-b border-blue-800/40 dark:border-blue-500/40 flex items-center justify-between gap-3">
           <span>💬 Network Assistant</span>
           <DeviceChip alias={currentDevice?.alias} host={currentDevice?.host} loading={!hasFirstResponse} />
         </div>
 
         {/* Chat messages */}
-        <div className="flex-1 px-6 py-5 space-y-5 overflow-y-auto max-h-[65vh]">
+  <div className="flex-1 px-6 py-5 space-y-5 overflow-y-auto max-h-[65vh] bg-white dark:bg-gray-900 transition-colors">
           {messages.length === 0 && !isLoading && (
-            <div className="text-center text-gray-400 py-16">
+            <div className="text-center text-gray-400 dark:text-gray-500 py-16">
               <p className="mb-2">Start chatting below 👇</p>
               <p className="text-sm">
                 Example: <span className="text-blue-500">"Show VLANs"</span>
@@ -156,7 +156,7 @@ export default function ChatPage() {
                   className={`rounded-xl px-4 py-3 text-sm whitespace-pre-wrap max-w-xs shadow-md ${
                     msg.sender === 'user'
                       ? 'bg-emerald-500 text-white rounded-br-none'
-                      : 'bg-blue-100 text-gray-800 rounded-bl-none'
+                      : 'bg-blue-100 dark:bg-blue-900/40 text-gray-800 dark:text-gray-100 rounded-bl-none'
                   }`}
                 >
                   <div className="text-xs opacity-60 mb-1 flex items-center gap-1">
@@ -172,7 +172,7 @@ export default function ChatPage() {
           {isLoading && (
             <div className="flex justify-start">
               <motion.div
-                className="bg-blue-100 text-gray-800 px-4 py-3 rounded-xl text-sm shadow"
+                className="bg-blue-100 dark:bg-blue-900/40 text-gray-800 dark:text-gray-100 px-4 py-3 rounded-xl text-sm shadow"
                 initial={{ opacity: 0.6 }}
                 animate={{ opacity: [0.6, 1, 0.6] }}
                 transition={{ duration: 1.2, repeat: Infinity }}
@@ -188,14 +188,14 @@ export default function ChatPage() {
         {/* Input area */}
         <form
           onSubmit={handleSend}
-          className="flex gap-3 p-4 border-t border-gray-200 bg-white"
+          className="flex gap-3 p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900"
         >
           <input
             type="text"
             placeholder="Ask a network command..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            className="flex-1 px-4 py-2 rounded-full bg-gray-100 text-gray-900 placeholder-gray-400 border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none"
+            className="flex-1 px-4 py-2 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 border border-gray-300 dark:border-gray-700 focus:ring-2 focus:ring-blue-400 focus:outline-none"
             disabled={isLoading}
           />
           <MagneticButton
@@ -203,8 +203,8 @@ export default function ChatPage() {
             disabled={!input.trim() || isLoading}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition ${
               !input.trim() || isLoading
-                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
+                : 'bg-emerald-500 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white'
             }`}
           >
             <FiSend />

@@ -1,12 +1,17 @@
 "use client";
 
 import Link from 'next/link';
-import { FiTerminal, FiWifi, FiServer, FiShield, FiArrowRight, FiLock, FiMail } from 'react-icons/fi';
+import { FiTerminal, FiWifi, FiServer, FiShield, FiArrowRight, FiLock, FiMail, FiChevronRight, FiGlobe } from 'react-icons/fi';
 import { motion, Variants } from 'framer-motion';
 import React from 'react';
+import { Container } from '@/components/ui/primitives/container';
+import { Section } from '@/components/ui/primitives/section';
+import { Card, CardHeader, CardTitle, CardSubtitle, CardContent } from '@/components/ui/primitives/card';
+import { Button } from '@/components/ui/primitives/button';
 import { useAuth } from '@/components/AuthProvider';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Squares } from '@/components/ui/squares-background';
 
 // Best Practice: Define a type for your features for type safety and clarity.
 type Feature = {
@@ -167,84 +172,71 @@ export default function HomePage() {
   ];
 
   return (
-    <main className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 overflow-hidden">
-      {/* --- Dynamic Background --- */}
-      <div className="absolute top-0 left-0 w-full h-full -z-10">
-        <div className="absolute inset-0 bg-grid-gray-200/50 dark:bg-grid-gray-700/30 [mask-image:linear-gradient(to_bottom,white_10%,transparent_100%)]"></div>
-        <div className="absolute inset-0 bg-gradient-to-b from-white dark:from-gray-900 to-transparent"></div>
+    <main className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 overflow-hidden relative">
+      {/* Squares background animation */}
+      <div className="absolute inset-0 -z-10">
+        <Squares 
+          direction="diagonal"
+          speed={0.3}
+          squareSize={80}
+          borderColor="rgba(99, 102, 241, 0.6)"
+          hoverFillColor="rgba(99, 102, 241, 0.2)"
+          className="opacity-80"
+        />
       </div>
 
-      {/* --- Hero Section --- */}
-      <section className="py-20 md:py-28 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.7, ease: 'easeInOut' }}
-        >
-          <h1 className="text-4xl md:text-6xl font-extrabold text-gray-900 dark:text-white tracking-tight mb-4">
-            Network Command Hub
-          </h1>
-          <p className="text-lg md:text-xl text-gray-600 dark:text-gray-400 max-w-3xl mx-auto mb-10">
-            Secure, intelligent automation for your entire network infrastructure.
-          </p>
-          <div className="mt-10 flex justify-center items-center gap-4 flex-wrap">
-            <Link href="/login">
-              <button className="px-8 py-3 bg-indigo-600 text-white rounded-lg font-semibold text-base hover:bg-indigo-700 shadow-lg shadow-indigo-500/20 hover:shadow-indigo-500/30 transition-all duration-300 transform hover:scale-105">
-                Get Started
-              </button>
-            </Link>
-            <Link href="/chat">
-              <button className="px-8 py-3 bg-white dark:bg-gray-800 text-gray-800 dark:text-white border border-gray-300 dark:border-gray-700 rounded-lg font-semibold text-base hover:bg-gray-100 dark:hover:bg-gray-700 hover:border-gray-400 dark:hover:border-gray-600 shadow-sm hover:shadow-md transition-all duration-300 transform hover:scale-105">
-                Go to Chat
-              </button>
-            </Link>
-            {user && (
-              <Link href="/get-location">
-                <button className="px-8 py-3 bg-teal-600 text-white rounded-lg font-semibold text-base hover:bg-teal-700 shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 transition-all duration-300 transform hover:scale-105">
-                  Get Location
-                </button>
-              </Link>
-            )}
-          </div>
-        </motion.div>
-      </section>
-
-      {/* --- Features Grid --- */}
-      <section className="py-16 sm:py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
-        <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white">A Unified Platform</h2>
-          <p className="text-lg text-gray-500 dark:text-gray-400 mt-3">All the tools you need for modern network management.</p>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-          {features.map((feature, index) => (
-            <FeatureCard key={feature.title} feature={feature} index={index} />
-          ))}
-        </div>
-      </section>
-
-      {/* --- CTA Section --- */}
-      <section className="py-20 my-16">
-        <div className="max-w-4xl mx-auto text-center px-4">
-          <div className="relative p-10 bg-gray-900/70 dark:bg-gray-900/80 backdrop-blur-lg rounded-2xl border border-gray-700 shadow-2xl">
-            <h2 className="text-3xl font-bold text-white mb-4">
-              Ready to Transform Your Operations?
-            </h2>
-            <p className="text-lg text-gray-300 mb-8 max-w-2xl mx-auto">
-              Join hundreds of engineers automating their infrastructure and reclaiming valuable time.
+      {/* Hero */}
+      <Section padding="xl" className="relative">
+        <Container center className="relative">
+          <motion.div initial={{ opacity:0, y:34 }} animate={{ opacity:1, y:0 }} transition={{ duration:.7, ease:[0.25,0.4,0.15,1] }}>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-gray-200 dark:border-gray-800 bg-white/90 dark:bg-gray-900/90 backdrop-blur-md text-xs font-medium text-gray-600 dark:text-gray-400 mb-6 shadow-sm">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> Live NetOps Preview
+            </div>
+            <h1 className="font-extrabold tracking-tight text-4xl md:text-6xl leading-[1.05] max-w-4xl mx-auto bg-clip-text text-transparent bg-gradient-to-b from-gray-900 to-gray-700 dark:from-white dark:to-gray-300">
+              Infinitely Personalized Network Automation
+            </h1>
+            <p className="mt-6 text-lg md:text-xl text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+              Execute commands, visualize infrastructure, and monitor device health with AI-assisted workflows.
             </p>
-            <div className="flex flex-col sm:flex-row justify-center gap-4">
-              <Link href="/login">
-                <button className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors duration-300 w-full sm:w-auto">
-                  Start a Free Trial
-                </button>
-              </Link>
-              <button className="px-8 py-3 bg-transparent border border-gray-600 text-white hover:bg-gray-800 hover:border-gray-500 rounded-lg font-medium transition-colors duration-300 w-full sm:w-auto">
-                Contact Sales
-              </button>
+            <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+              <Link href="/chat"><Button size="lg" className="px-8">Open Chat <FiChevronRight className="h-4 w-4" /></Button></Link>
+              <Link href="/get-location"><Button size="lg" className="px-8">Globe View <FiChevronRight className="h-4 w-4" /></Button></Link>
+            </div>
+          </motion.div>
+
+          {/* Removed duplicated tilted feature cards showcase (was above secondary feature grid) */}
+        </Container>
+      </Section>
+
+    {/* Secondary feature grid (background unified with hero to avoid dual tone) */}
+  <Section background="subtle" padding="lg" className="relative bg-white dark:bg-gray-950">
+        <Container>
+          <div className="text-center mb-14">
+            <h2 className="text-3xl md:text-4xl font-bold tracking-tight">A Unified Platform</h2>
+            <p className="mt-3 text-lg text-gray-600 dark:text-gray-400">All the tools you need for modern network management.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+            {features.map((feature, index) => (
+              <FeatureCard key={feature.title} feature={feature} index={index} />
+            ))}
+          </div>
+        </Container>
+      </Section>
+
+      {/* Call To Action */}
+  <Section padding="xl" className="relative bg-white dark:bg-gray-950">
+        <Container center className="max-w-4xl">
+          <div className="relative p-10 md:p-14 rounded-2xl border border-gray-200 dark:border-gray-800 bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-900 dark:via-gray-900 dark:to-gray-850 text-gray-900 dark:text-white overflow-hidden shadow-2xl transition-colors">
+            <div className="pointer-events-none absolute inset-0 opacity-30 mix-blend-overlay bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.12),transparent_60%)]" />
+            <h2 className="text-3xl md:text-4xl font-bold mb-5">Ready to Transform Your Operations?</h2>
+            <p className="text-base md:text-lg text-gray-600 dark:text-gray-300 mb-8 max-w-2xl mx-auto">Join engineers automating their infrastructure and reclaiming valuable time with intelligent workflows and unified visibility.</p>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <Link href="/login"><Button size="lg" className="px-8">Start Free Trial <FiChevronRight className="h-4 w-4" /></Button></Link>
+              <Button variant="outline" tone="primary" size="lg" className="px-8 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-white/10">Contact Sales</Button>
             </div>
           </div>
-        </div>
-      </section>
+        </Container>
+      </Section>
     </main>
   );
 }

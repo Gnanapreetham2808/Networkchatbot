@@ -33,14 +33,14 @@ export default function SettingsPage() {
   };
 
   return (
-    <main className="max-w-4xl mx-auto py-12 px-4 sm:px-6 lg:px-8 text-gray-800">
-      <h2 className="text-3xl font-bold mb-8 flex items-center gap-2">
+  <main className="max-w-4xl mx-auto py-12 px-4 sm:px-6 lg:px-8 text-gray-800 dark:text-gray-100">
+      <h2 className="text-3xl font-bold mb-8 flex items-center gap-2 text-gray-900 dark:text-gray-100">
         <FiSliders className="text-blue-600" /> Settings
       </h2>
 
       <div className="space-y-8">
         {/* Theme Settings */}
-        <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
+  <div className="bg-white dark:bg-gray-900 rounded-xl shadow p-6 border border-gray-100 dark:border-gray-700 transition-colors">
           <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
             <FiUser /> Appearance
           </h3>
@@ -57,7 +57,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Notifications */}
-        <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
+  <div className="bg-white dark:bg-gray-900 rounded-xl shadow p-6 border border-gray-100 dark:border-gray-700 transition-colors">
           <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
             <FiBell /> Notifications
           </h3>
@@ -74,7 +74,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Security */}
-        <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
+  <div className="bg-white dark:bg-gray-900 rounded-xl shadow p-6 border border-gray-100 dark:border-gray-700 transition-colors">
           <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
             <FiShield /> Security
           </h3>
@@ -103,7 +103,7 @@ export default function SettingsPage() {
               onChange={handleChange}
               className="w-2/3"
             />
-            <span className="ml-2 text-sm text-gray-700">{settings.sessionTimeout} min</span>
+            <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{settings.sessionTimeout} min</span>
           </div>
         </div>
 
@@ -111,7 +111,7 @@ export default function SettingsPage() {
         <div className="text-right">
           <button
             onClick={handleSave}
-            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
+            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 dark:hover:bg-blue-500 text-white px-6 py-2 rounded-lg font-medium transition-colors"
           >
             <FiSave /> Save Settings
           </button>

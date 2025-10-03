@@ -109,15 +109,15 @@ export default function LogsPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Audit Logs</h1>
-          <p className="text-gray-500">System events and configuration changes</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Audit Logs</h1>
+          <p className="text-gray-500 dark:text-gray-400">System events and configuration changes</p>
         </div>
         
         <div className="flex gap-2 w-full sm:w-auto">
           <select
             value={filters.dateRange}
             onChange={(e) => setFilters({...filters, dateRange: e.target.value})}
-            className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100"
           >
             <option value="1h">Last hour</option>
             <option value="24h">Last 24 hours</option>
@@ -126,15 +126,14 @@ export default function LogsPage() {
             <option value="all">All time</option>
           </select>
           
-          <button className="flex items-center gap-2 px-4 py-2 bg-white border rounded-lg hover:bg-gray-50 transition-colors">
+          <button className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-gray-700 dark:text-gray-200">
             <FiDownload className="h-4 w-4" />
             <span>Export</span>
           </button>
         </div>
       </div>
-
-      <div className="bg-white border rounded-lg shadow-sm overflow-hidden">
-        <div className="p-4 border-b bg-gray-50 flex flex-col md:flex-row gap-4">
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm overflow-hidden transition-colors">
+        <div className="p-4 border-b bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 flex flex-col md:flex-row gap-4">
           <div className="relative flex-1 max-w-md">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <FiSearch className="h-4 w-4 text-gray-400" />
@@ -142,7 +141,7 @@ export default function LogsPage() {
             <input
               type="text"
               placeholder="Search logs..."
-              className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
               value={filters.search}
               onChange={(e) => setFilters({...filters, search: e.target.value})}
             />
@@ -152,7 +151,7 @@ export default function LogsPage() {
             <select
               value={filters.status}
               onChange={(e) => setFilters({...filters, status: e.target.value})}
-              className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100"
             >
               <option value="">All Statuses</option>
               <option value="success">Success</option>
@@ -163,7 +162,7 @@ export default function LogsPage() {
             <select
               value={filters.user}
               onChange={(e) => setFilters({...filters, user: e.target.value})}
-              className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100"
             >
               <option value="">All Users</option>
               <option value="admin">Admin</option>
@@ -186,22 +185,22 @@ export default function LogsPage() {
             </div>
           </div>
         ) : (
-          <div className="divide-y">
+          <div className="divide-y divide-gray-200 dark:divide-gray-700">
             {filteredLogs.length > 0 ? (
               filteredLogs.map((log) => (
-                <div key={log.id} className="p-4 hover:bg-gray-50 transition-colors">
+                <div key={log.id} className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                   <div className="flex items-start gap-4">
                     <div className="mt-1 flex-shrink-0">
                       {getStatusIcon(log.status)}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between">
-                        <p className="font-medium text-gray-900 truncate">{log.action}</p>
-                        <p className="text-sm text-gray-500 ml-2 whitespace-nowrap">
+                        <p className="font-medium text-gray-900 dark:text-gray-100 truncate">{log.action}</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 ml-2 whitespace-nowrap">
                           {formatTimestamp(log.timestamp)}
                         </p>
                       </div>
-                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500">
+                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500 dark:text-gray-400">
                         <div className="flex items-center">
                           <FiUser className="mr-1.5 h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
                           {log.user}
@@ -219,7 +218,7 @@ export default function LogsPage() {
                 </div>
               ))
             ) : (
-              <div className="p-8 text-center text-gray-500">
+              <div className="p-8 text-center text-gray-500 dark:text-gray-400">
                 No logs found matching your filters
               </div>
             )}

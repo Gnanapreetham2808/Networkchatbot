@@ -71,13 +71,17 @@ export default function GetLocationGlobePage() {
       const baseColor = l.site.startsWith('uk') ? 'indigo' : 'emerald';
       const alt = globeAltitudeRef.current;
       const scale = Math.min(1.25, Math.max(0.75, 2.2 / (alt || 2.2)));
+      // Predefined class variants to avoid dynamic tailwind class names being purged
+      const colorClasses = baseColor === 'indigo'
+        ? 'bg-indigo-600/90 hover:bg-indigo-500 border-indigo-300/50 text-indigo-50'
+        : 'bg-emerald-600/90 hover:bg-emerald-500 border-emerald-300/50 text-emerald-50';
       return (
         <Link
           href="/chat"
           aria-label={`Open chat for location ${l.label}`}
           title={l.label}
-          className={`group marker-item relative inline-flex items-center gap-1 px-3 py-1 rounded-md text-[10px] md:text-xs font-semibold border backdrop-blur-sm tracking-wide overflow-hidden
-            bg-${baseColor}-700/90 hover:bg-${baseColor}-600 border-${baseColor}-300/40 text-${baseColor}-50 transition-transform`} style={{
+          className={`group marker-item relative inline-flex items-center gap-1 px-3 py-1 rounded-md text-[10px] md:text-xs font-semibold border backdrop-blur-sm tracking-wide overflow-hidden transition-transform ${colorClasses}`}
+          style={{
             textShadow: '0 1px 2px rgba(0,0,0,0.6)',
             transform: `translateZ(0) scale(${scale})`
           }}
@@ -138,7 +142,7 @@ export default function GetLocationGlobePage() {
   } as const;
 
   return (
-    <div className="text-white bg-gradient-to-b from-slate-950 via-slate-900 to-black">
+    <div className="min-h-screen bg-gradient-to-b from-white via-gray-50 to-gray-100 dark:from-slate-950 dark:via-slate-900 dark:to-black transition-colors text-gray-900 dark:text-white">
       {/* Hero / Globe Section */}
       <section className="relative mx-auto w-full max-w-7xl min-h-[calc(100vh-4rem)] flex flex-col items-center justify-center px-4">
         <motion.div
@@ -147,14 +151,14 @@ export default function GetLocationGlobePage() {
           transition={{duration:0.6}}
           className="text-center max-w-3xl mx-auto z-10 mb-6"
         >
-          <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 via-sky-300 to-emerald-300">
+          <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 via-sky-500 to-emerald-600 dark:from-indigo-300 dark:via-sky-300 dark:to-emerald-300">
             Network Locations
           </h1>
-          <p className="mt-2 text-sm md:text-base text-slate-300">
+          <p className="mt-2 text-sm md:text-base text-gray-600 dark:text-slate-300">
             Current active network endpoints visualized on the globe. Click a location to open the chat.
           </p>
-          {loading && <p className="mt-2 text-xs text-slate-400">Loading locations...</p>}
-          {error && !loading && <p className="mt-2 text-xs text-red-400">Failed: {error}</p>}
+          {loading && <p className="mt-2 text-xs text-gray-500 dark:text-slate-400">Loading locations...</p>}
+          {error && !loading && <p className="mt-2 text-xs text-red-500 dark:text-red-400">Failed: {error}</p>}
         </motion.div>
 
         <div className="relative w-full max-w-[780px] aspect-square">
@@ -172,19 +176,19 @@ export default function GetLocationGlobePage() {
               href="/chat"
               className={`group border rounded-lg px-5 py-4 transition shadow flex items-center justify-between backdrop-blur-sm ${
                 l.site.startsWith('uk')
-                  ? 'border-indigo-400/30 bg-indigo-900/30 hover:bg-indigo-800/40'
-                  : 'border-emerald-400/30 bg-emerald-900/30 hover:bg-emerald-800/40'
+                  ? 'border-indigo-300 bg-indigo-50 hover:bg-indigo-100 dark:border-indigo-400/30 dark:bg-indigo-900/30 dark:hover:bg-indigo-800/40'
+                  : 'border-emerald-300 bg-emerald-50 hover:bg-emerald-100 dark:border-emerald-400/30 dark:bg-emerald-900/30 dark:hover:bg-emerald-800/40'
               }`}
             >
               <div>
                 <p className={`text-[11px] uppercase tracking-wider mb-1 ${
-                  l.site.startsWith('uk') ? 'text-indigo-300/80' : 'text-emerald-300/80'
+                  l.site.startsWith('uk') ? 'text-indigo-600 dark:text-indigo-300/80' : 'text-emerald-600 dark:text-emerald-300/80'
                 }`}>
                   Location
                 </p>
-                <p className="text-sm font-semibold leading-tight">{l.label}</p>
+                <p className="text-sm font-semibold leading-tight text-gray-800 dark:text-gray-100">{l.label}</p>
               </div>
-              <span className={`text-[11px] font-medium px-3 py-1 rounded-md ${
+              <span className={`text-[11px] font-medium px-3 py-1 rounded-md text-white ${
                 l.site.startsWith('uk')
                   ? 'bg-indigo-600 group-hover:bg-indigo-500'
                   : 'bg-emerald-600 group-hover:bg-emerald-500'
@@ -194,7 +198,7 @@ export default function GetLocationGlobePage() {
             </Link>
           ))}
           {!loading && locations.length === 0 && (
-            <div className="col-span-full text-center text-xs text-slate-400">
+            <div className="col-span-full text-center text-xs text-gray-500 dark:text-slate-400">
               No locations available.
             </div>
           )}

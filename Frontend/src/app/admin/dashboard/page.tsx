@@ -20,37 +20,37 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Network Overview</h1>
+    <div className="p-6 space-y-6 bg-transparent">
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Network Overview</h1>
       
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {stats.map((stat) => (
-          <div key={stat.title} className="bg-white rounded-xl shadow-sm border p-6">
+          <div key={stat.title} className="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 transition-colors">
             <div className="flex items-center justify-between">
-              <div className="text-gray-500">{stat.title}</div>
-              <div className={`p-2 rounded-lg ${stat.trend === 'up' ? 'bg-green-100 text-green-600' : stat.trend === 'down' ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600'}`}>
+              <div className="text-gray-500 dark:text-gray-400">{stat.title}</div>
+              <div className={`p-2 rounded-lg ${stat.trend === 'up' ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400' : stat.trend === 'down' ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}>
                 {stat.icon}
               </div>
             </div>
-            <div className="mt-2 text-3xl font-semibold">{stat.value}</div>
+            <div className="mt-2 text-3xl font-semibold text-gray-900 dark:text-gray-100">{stat.value}</div>
           </div>
         ))}
       </div>
 
       {/* Recent Activity */}
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-        <div className="px-6 py-4 border-b">
-          <h2 className="font-medium">Recent Configuration Changes</h2>
+      <div className="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden transition-colors">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="font-medium text-gray-900 dark:text-gray-100">Recent Configuration Changes</h2>
         </div>
-        <div className="divide-y">
+        <div className="divide-y divide-gray-200 dark:divide-gray-700">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+            <div key={i} className="px-6 py-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
               <div>
-                <div className="font-medium">VLAN Configuration</div>
-                <div className="text-sm text-gray-500">Switch-{i+1}.core</div>
+                <div className="font-medium text-gray-900 dark:text-gray-100">VLAN Configuration</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">Switch-{i+1}.core</div>
               </div>
-              <div className="text-sm text-gray-500">2 hours ago</div>
+              <div className="text-sm text-gray-500 dark:text-gray-400">2 hours ago</div>
             </div>
           ))}
         </div>

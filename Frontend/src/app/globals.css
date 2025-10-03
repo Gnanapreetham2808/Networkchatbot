@@ -1,3 +1,24 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Design Tokens (light/dark adaptable) */
+:root {
+	--dot-grid-color: #e5e7eb; /* slate-200 */
+}
+.dark {
+	--dot-grid-color: #334155; /* slate-700 */
+}
+
+/* Subtle dot grid background utility (used for hero / marketing surfaces) */
+.bg-surface-grid {
+	background-image: radial-gradient(circle at 1px 1px,var(--dot-grid-color) 1px,transparent 0);
+	background-size: 28px 28px;
+}
+
+/* Optional vertical fade mask helper */
+.mask-fade-b {
+	-webkit-mask-image: linear-gradient(to bottom,rgba(0,0,0,1),rgba(0,0,0,.9),rgba(0,0,0,0));
+	mask-image: linear-gradient(to bottom,rgba(0,0,0,1),rgba(0,0,0,.9),rgba(0,0,0,0));
+}
+

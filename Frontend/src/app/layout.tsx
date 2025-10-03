@@ -13,11 +13,23 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body className="h-screen flex flex-col font-sans bg-gray-50">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `
+          (function() {
+            try {
+              const ls = localStorage.getItem('theme');
+              const m = window.matchMedia('(prefers-color-scheme: dark)').matches;
+              const theme = ls || (m ? 'dark' : 'light');
+              if (theme === 'dark') document.documentElement.classList.add('dark');
+            } catch(e) {}
+          })();
+        `}} />
+      </head>
+      <body className="min-h-screen flex flex-col font-sans bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 antialiased selection:bg-gray-900 selection:text-white">
         <AuthProvider>
           <NavBar />
-          <main className="flex-1 overflow-y-auto p-6">
+          <main className="flex-1 overflow-y-auto">
             <FirebaseConfigStatus />
             {children}
           </main>
