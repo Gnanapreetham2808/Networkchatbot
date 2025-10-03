@@ -77,12 +77,13 @@ _PHRASE_MAP = {
 
 # Simple location keyword to alias preference (fallback when no explicit alias)
 _LOCATION_KEYWORDS = [
-    (re.compile(r"\b(vijayawada|india)\b", re.I), "INVIJB1SW1"),
+    # Expanded Vijayawada synonyms (short forms or partials) map to primary alias
+    (re.compile(r"\b(vij|vijay|vijaya|vijayawada|india)\b", re.I), "INVIJB1SW1"),
     (re.compile(r"\b(london|uk)\b", re.I), "UKLONB1SW2"),
 ]
 
 # Known location keys for fuzzy matching
-_FUZZY_KEYS = ["london", "uk", "vijayawada", "building 1"]
+_FUZZY_KEYS = ["london", "uk", "vijayawada", "vij", "vijay", "vijaya", "building 1"]
 
 
 def _attach_alias(alias: str, dev: dict | None) -> Optional[dict]:
@@ -201,7 +202,7 @@ def resolve_device(query: str) -> Tuple[Optional[dict], List[str], Optional[str]
     for key in fuzzy_hits:
         if key in ("london", "uk"):
             mapped_aliases.append("UKLONB1SW2")
-        elif key in ("vijayawada", "building 1"):
+        elif key in ("vijayawada", "vij", "vijay", "vijaya", "building 1"):
             mapped_aliases.append("INVIJB1SW1")
 
     # Reduce to single site if both UK and IN appear -> ambiguous

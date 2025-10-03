@@ -104,6 +104,12 @@ def _find_adapter_dir() -> Optional[Path]:
             p = base / p
         if (p / "adapter_config.json").exists():
             return p
+    # Explicit preferred adapter name priority (new LoRA folder): t5_cli_lora_v5_final
+    preferred_names_order = [
+        "t5_cli_lora_v5_final",
+        "t5_cli_lora_v5",
+        "t5_cli_lora_v5_final"  # duplicate safe entry for clarity
+    ]
     # scan recursively for adapter_config.json (handle nested duplicated folder names)
     nlp_engine_dir = base.parent / "chatbot" / "nlp_engine"
     if nlp_engine_dir.exists():
@@ -113,10 +119,25 @@ def _find_adapter_dir() -> Optional[Path]:
         for ap in nlp_engine_dir.rglob("adapter_config.json"):
             cand = ap.parent
             name = cand.name.lower()
-            if "v5" in name or "lora_v5" in name:
+            if name in preferred_names_order:
+                # Insert preserving the explicit order priority
+                if cand not in preferred:
+                    preferred.append(cand)
+            elif "lora" in name and "v5" in name:
                 preferred.append(cand)
             else:
                 others.append(cand)
+        # Reorder preferred by our explicit list first
+        ordered_pref: list[Path] = []
+        for pname in preferred_names_order:
+            for c in preferred:
+                if c.name.lower() == pname and c not in ordered_pref:
+                    ordered_pref.append(c)
+        # append any remaining preferred not in ordered list
+        for c in preferred:
+            if c not in ordered_pref:
+                ordered_pref.append(c)
+        preferred = ordered_pref
         if preferred:
             return preferred[0]
         if others:

@@ -216,36 +216,41 @@ class NetworkCommandAPIView(APIView):
                 hostname = force_alias
         elif force_ip:
             device_ip = force_ip
-
+        # Resolution Phase ----------------------------------------------------
         # Always attempt resolution each request; use conversation only when no new hints
         resolved_device_dict = None
-
-        def _has_any_hint(q: str) -> bool:
-            ql = (q or "").lower()
-            return any(k in ql for k in ["vijayawada", "india", "london", "uk", "building 1"]) or bool(hostname)
+        resolution_method = None  # direct_alias | phrase | fuzzy | keyword | explicit_fallback | intent_override | conversation_fallback | default | ip_match
 
         dev_dict = None
-        candidates = []
+        candidates: list[str] = []
         err = None
-        # Try explicit alias/hostname first
+        # 1. Explicit alias/hostname
         if hostname:
             dev_dict, candidates, err = resolve_device(hostname)
-        # If no explicit alias or not found, try the query text (location fuzzy matching inside resolver)
+            if dev_dict:
+                resolution_method = "direct_alias"
+        # 2. Query-based (phrase/fuzzy/keyword)
         if not dev_dict:
             q_to_use = query or ""
             dev_dict2, candidates2, err2 = resolve_device(q_to_use)
             if dev_dict2:
+                lowered = q_to_use.lower()
+                if any(k in lowered for k in ["vijayawada", "vij ", " vij", "vijay", "vijaya", "india", "london", "uk", "building 1"]):
+                    resolution_method = resolution_method or "fuzzy"
+                else:
+                    resolution_method = resolution_method or "phrase"
                 dev_dict, candidates, err = dev_dict2, [], None
             elif candidates2:
                 candidates, err = candidates2, err2
 
-        # If the user intends the Vijayawada site (e.g., query includes it) and still no device resolved,
-        # force-select INVIJB1SW1 if available.
+        # 3. Explicit Vijayawada fallback if intent present but still unresolved
         if not dev_dict and ("vijayawada" in (query or "").lower() or (hostname and str(hostname).upper() == "INVIJB1SW1")):
             dev_fallback, _, _ = resolve_device("INVIJB1SW1")
             if dev_fallback:
                 dev_dict = dev_fallback
+                resolution_method = resolution_method or "explicit_fallback"
 
+        # 4. Apply resolved or candidate handling
         if dev_dict:
             resolved_device_dict = dev_dict
             device_ip = dev_dict.get("host") or dev_dict.get("ip")
@@ -253,9 +258,8 @@ class NetworkCommandAPIView(APIView):
         elif candidates:
             return Response({"error": "Multiple switches found, please specify one", "candidates": candidates, "session_id": session_id}, status=400)
         else:
-            # No resolution → reuse conversation device if exists, but also restore full device dict
+            # 5. Conversation fallback
             if conversation and (conversation.device_host or conversation.device_alias):
-                # Prefer finding by host to pull credentials/type
                 alias_found, dev_by_host = (None, None)
                 if conversation.device_host:
                     alias_found, dev_by_host = find_device_by_host(conversation.device_host)
@@ -263,18 +267,19 @@ class NetworkCommandAPIView(APIView):
                     resolved_device_dict = dev_by_host
                     device_ip = dev_by_host.get("host")
                     hostname = dev_by_host.get("alias") or alias_found or conversation.device_alias
+                    resolution_method = resolution_method or "conversation_fallback"
                 elif conversation.device_alias:
-                    # Fallback: try resolving by stored alias (handles IP changes)
                     alias_dev, _, _ = resolve_device(conversation.device_alias)
                     if alias_dev:
                         resolved_device_dict = alias_dev
                         device_ip = alias_dev.get("host") or alias_dev.get("ip")
                         hostname = alias_dev.get("alias") or conversation.device_alias
+                        resolution_method = resolution_method or "conversation_fallback"
                     else:
                         hostname = conversation.device_alias
                         device_ip = conversation.device_host
 
-        # Fallback to DEFAULT_DEVICE_ALIAS or DEFAULT_DEVICE_IP from env if still not selected (UK default behavior)
+        # 6. Default alias fallback
         if not device_ip:
             default_alias = os.getenv("DEFAULT_DEVICE_ALIAS") or "UKLONB1SW2"
             default_ip = os.getenv("DEFAULT_DEVICE_IP")
@@ -284,17 +289,33 @@ class NetworkCommandAPIView(APIView):
                     resolved_device_dict = dev_dict
                     device_ip = dev_dict.get("host") or dev_dict.get("ip")
                     hostname = dev_dict.get("alias") or default_alias
+                    resolution_method = resolution_method or "default"
                     print(f"[NetworkCommandAPIView] default alias fallback -> {default_alias} {device_ip}")
             elif default_ip:
                 device_ip = default_ip
                 print(f"[NetworkCommandAPIView] default IP fallback -> {default_ip}")
 
-        # If we have only an IP at this point (e.g., forced or provided) and no resolved dict, try to map it to a known device
+        # 7. Reverse lookup by IP if needed
         if device_ip and not resolved_device_dict:
             alias_found, dev_by_host = find_device_by_host(device_ip)
             if dev_by_host:
                 resolved_device_dict = dev_by_host
                 hostname = dev_by_host.get("alias") or alias_found or hostname
+                resolution_method = resolution_method or "ip_match"
+
+        # 8. Late Vijayawada intent override (UK -> IN swap)
+        if resolved_device_dict and query:
+            ql = query.lower()
+            vij_intent = any(k in ql for k in ["vijayawada", "vij ", " vij", "vijay ", " vijay", "vijaya ", " vijaya", "india"])
+            alias_now = (resolved_device_dict.get("alias") or "").upper()
+            if vij_intent and alias_now.startswith("UK"):
+                alt_dev, _, _ = resolve_device("INVIJB1SW1")
+                if alt_dev:
+                    print("[NetworkCommandAPIView] intent override -> switching target to INVIJB1SW1 due to Vijayawada reference")
+                    resolved_device_dict = alt_dev
+                    device_ip = alt_dev.get("host") or alt_dev.get("ip") or device_ip
+                    hostname = alt_dev.get("alias") or hostname
+                    resolution_method = "intent_override"
 
         # Enforce blocks: if resolved to a blocked IP or alias, reroute to default/forced alias or error
         if device_ip and device_ip in blocked_ips:
@@ -312,17 +333,34 @@ class NetworkCommandAPIView(APIView):
 
         print(f"[NetworkCommandAPIView] query={query!r} session={session_id} target={device_ip} alias_host={hostname}")
 
+        # Determine connection strategy:
+        #  direct (default) | jump_first (try jump then direct fallback) | jump_only (only via jump host)
+        strategy = (resolved_device_dict or {}).get("connection_strategy", "direct") if resolved_device_dict else "direct"
+        alias_upper = hostname.upper() if hostname else None
+        # Remove previous forced jump logic for Vijayawada; allow direct connect (host now points to site IP)
+        # If future need arises, reintroduce conditional enforcement here.
+        # Environment overrides:
+        #  ALWAYS_JUMP_ALIASES = comma list of aliases to force jump_only
+        #  FORCE_JUMP_FOR_ALL=1 -> treat any device with jump_via as jump_only
+        always_jump_aliases = {a.strip().upper() for a in os.getenv("ALWAYS_JUMP_ALIASES", "").split(',') if a.strip()}
+        if alias_upper and alias_upper in always_jump_aliases:
+            strategy = "jump_only"
+        if os.getenv("FORCE_JUMP_FOR_ALL", "0") == "1" and resolved_device_dict and resolved_device_dict.get("jump_via"):
+            strategy = "jump_only"
+        print(f"[NetworkCommandAPIView] strategy={strategy}")
+
         if not device_ip:
             return Response({"error": "Failed to run command", "session_id": session_id}, status=400)
 
         # Jump-first strategy: if device defines jump_via and connection_strategy == jump_first, attempt multi-hop immediately
         jump_first_attempted = False
-        if resolved_device_dict and resolved_device_dict.get("jump_via") and resolved_device_dict.get("connection_strategy") == "jump_first":
+        if resolved_device_dict and resolved_device_dict.get("jump_via") and strategy in ("jump_first", "jump_only"):
             jump_alias = str(resolved_device_dict.get("jump_via")).upper()
             jd, _, _ = resolve_device(jump_alias)
             if jd:
                 try:
-                    print(f"[NetworkCommandAPIView] jump_first strategy -> trying jump via {jump_alias} before direct connect")
+                    log_label = "jump_only" if strategy == "jump_only" else "jump_first"
+                    print(f"[NetworkCommandAPIView] {log_label} strategy -> trying jump via {jump_alias}{' (no direct fallback)' if strategy=='jump_only' else ' before direct connect'}")
                     output = self._run_via_jump(
                         jump_device=jd,
                         target_device=resolved_device_dict,
@@ -359,8 +397,11 @@ class NetworkCommandAPIView(APIView):
                         "connection_method": "jump"
                     }, status=200)
                 except Exception as e:
-                    print(f"[NetworkCommandAPIView] jump_first initial attempt failed -> {e}; falling back to direct connect")
+                    print(f"[NetworkCommandAPIView] jump initial attempt failed -> {e}")
                     jump_first_attempted = True
+                    if strategy == "jump_only":
+                        # Do not attempt direct connection for jump_only strategy
+                        return Response({"error": "Unable to connect to device via jump host"}, status=502)
 
         cli_command = predict_cli(query)
         print(f"[NetworkCommandAPIView] predicted_cli={cli_command}")
@@ -529,6 +570,9 @@ class NetworkCommandAPIView(APIView):
                 telnet_device["host"] = device_ip
 
         if net_connect is None:
+            # If strategy jump_only and we already attempted jump path earlier, do not proceed to legacy direct attempts.
+            if strategy == "jump_only" and jump_first_attempted:
+                return Response({"error": "Unable to connect to device via jump host"}, status=502)
             # Optional legacy SSH fallback for very old devices (try original then alts)
             legacy_hosts = [device_ip] + [h for h in (resolved_device_dict.get("alt_hosts") if resolved_device_dict else []) if h != device_ip]
             if os.getenv("ENABLE_LEGACY_SSH", "1") == "1" and paramiko is not None:
@@ -595,7 +639,22 @@ class NetworkCommandAPIView(APIView):
                         return Response(resp_payload, status=200)
                     except Exception as e:
                         print(f"[NetworkCommandAPIView] jump via {jump_alias} failed -> {e}")
-            return Response({"error": "Unable to connect to device"}, status=502)
+            # Return generic error by default; optionally expose details for troubleshooting
+            debug_expose = os.getenv("EXPOSE_CONN_ERROR", "0") == "1"
+            try:
+                # Reuse _truthy helper if present in scope (defined earlier in method)
+                if 'data' in locals() and isinstance(data, dict) and 'debug' in data:
+                    # mypy: ignore dynamic function reference
+                    debug_expose = debug_expose or (locals().get('_truthy')(data.get('debug')) if callable(locals().get('_truthy')) else False)  # type: ignore
+            except Exception:
+                pass
+            resp_err = {"error": "Unable to connect to device"}
+            if debug_expose and last_err is not None:
+                # Include a concise string form of the last exception
+                resp_err["error_detail"] = str(last_err)[:600]
+                # Mark that sensitive details may have been truncated
+                resp_err["truncated"] = len(str(last_err)) > 600
+            return Response(resp_err, status=502)
 
         try:
             if (req_secret or env_secret):
@@ -665,7 +724,7 @@ class NetworkCommandAPIView(APIView):
             }, status=200)
 
         # Minimal JSON (raw output only)
-        base_resp = {"output": output, "device_alias": hostname, "device_host": device_ip, "session_id": session_id}
+        base_resp = {"output": output, "device_alias": hostname, "device_host": device_ip, "session_id": session_id, "resolved_device_alias": hostname, "resolution_method": resolution_method}
         if resolved_device_dict and resolved_device_dict.get("jump_via"):
             base_resp["jump_via"] = resolved_device_dict.get("jump_via")
             # Heuristic: output already cleaned in jump path; mark flag
@@ -800,77 +859,215 @@ class NetworkCommandAPIView(APIView):
                 jump_prompt = net_jump.find_prompt().strip()
             except Exception:
                 pass
-            # Legacy option environment support (mirroring front screenshot requirements)
-            leg_kex = os.getenv("SSH_LEGACY_KEX", "diffie-hellman-group1-sha1")
-            leg_hostkeys = os.getenv("SSH_LEGACY_KEY_TYPES", "ssh-rsa")
-            leg_ciphers = os.getenv("SSH_LEGACY_CIPHERS", "aes128-cbc,3des-cbc,aes192-cbc,aes256-cbc")
-            leg_macs = os.getenv("SSH_LEGACY_MACS", "hmac-sha1,hmac-sha1-96,hmac-md5,hmac-md5-96")
-            # Build -o arguments; some older IOS SSH relay might ignore unsupported ones (harmless)
-            ssh_cmd = (
-                f"ssh -o KexAlgorithms=+{leg_kex} -o HostKeyAlgorithms=+{leg_hostkeys} "
-                f"-o Ciphers=+{leg_ciphers} -o MACs=+{leg_macs} "
-                f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout={int(conn_timeout)} {username}@{target_host}"
-            )
-            net_jump.write_channel(ssh_cmd + "\n")
-            _sleep(0.6)
-            buf = _read_all(0.9)
-            if "Are you sure you want to continue" in buf:
-                net_jump.write_channel("yes\n")
-                _sleep(0.6)
-                buf += _read_all(0.9)
-            # Handle one or more password prompts (some devices might prompt twice on mismatch/latency)
-            pass_tries = 0
-            while "assword" in buf and pass_tries < 3 and "denied" not in buf.lower():
-                net_jump.write_channel(password + "\n")
-                pass_tries += 1
-                _sleep(0.9)
-                buf += _read_all(1.2)
-                # break early if we see a prompt now
-                if any(l.strip().endswith('#') for l in buf.splitlines()):
-                    break
-            # Determine target prompt (must differ from jump prompt). If not, retry with simplified ssh.
-            target_prompt = None
-            for line in buf.splitlines()[::-1]:
-                l = line.strip()
-                if l.endswith('#') and (not jump_prompt or l != jump_prompt):
-                    target_prompt = l
-                    break
-            if not target_prompt:
-                net_jump.write_channel("\n")
-                _sleep(0.5)
-                extra = _read_all(0.6)
-                for line in extra.splitlines()[::-1]:
-                    l = line.strip()
-                    if l.endswith('#') and (not jump_prompt or l != jump_prompt):
-                        target_prompt = l
-                        break
-            if not target_prompt:
-                # Retry with simplified ssh (without legacy options) in case those confuse intermediate platform
-                simple_ssh_cmd = f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{target_host}"
-                net_jump.write_channel(simple_ssh_cmd + "\n")
-                _sleep(0.8)
-                buf2 = _read_all(1.0)
-                if "Are you sure you want to continue" in buf2:
-                    net_jump.write_channel("yes\n")
+            # ------------------- Enhanced multi-host attempt + identity verification -------------------
+            # Build ordered candidate hosts: loopback (if distinct) -> primary host -> alt_hosts
+            candidate_hosts: list[str] = []
+            if target_device.get("loopback") and target_device.get("loopback") != target_device.get("host"):
+                candidate_hosts.append(target_device.get("loopback"))  # type: ignore[arg-type]
+            if target_device.get("host"):
+                candidate_hosts.append(target_device.get("host"))  # type: ignore[arg-type]
+            try:
+                for ah in (target_device.get("alt_hosts") or []):
+                    if ah and ah not in candidate_hosts:
+                        candidate_hosts.append(ah)
+            except Exception:
+                pass
+            if not candidate_hosts:
+                candidate_hosts.append(target_host)
+
+            expected_sub = (target_device.get('prompt_contains') or target_alias or '').strip() or None
+            strict_check = os.getenv('DISABLE_TARGET_PROMPT_ALIAS_CHECK', '0') != '1'
+            identity_verify_enabled = os.getenv('IDENTITY_VERIFY_ON_PROMPT_MISS', '1') == '1'
+            verify_cmd_env = os.getenv('VERIFY_IDENTITY_COMMAND')
+            verify_cmds = [c for c in [verify_cmd_env, 'show hostname', 'show running-config | include hostname'] if c]
+            allow_generic_env = os.getenv('ALLOW_GENERIC_TARGET_PROMPT', '1') == '1'
+            strict_mode = os.getenv('STRICT_JUMP_PROMPT', '0') == '1'
+            # Device-specific relax flag (devices.json can set "relax_prompt": true)
+            if target_device.get('relax_prompt'):
+                strict_check = False
+                print(f"[jump] relax_prompt flag active for device; disabling strict alias enforcement")
+            # Per-alias environment relaxation list (comma separated aliases)
+            relax_aliases_env = {a.strip().upper() for a in os.getenv('RELAX_PROMPT_ALIASES', '').split(',') if a.strip()}
+            if target_alias and target_alias.upper() in relax_aliases_env:
+                strict_check = False
+                print(f"[jump] alias {target_alias} in RELAX_PROMPT_ALIASES; disabling strict alias enforcement")
+            # Device-specific strict flag (devices.json can set "strict_prompt": true) to force alias match
+            if target_device.get('strict_prompt'):
+                strict_check = True
+                strict_mode = True
+                print(f"[jump] strict_prompt flag active for device; enforcing alias substring and disabling generic fallback")
+            # ALWAYS_STRICT_ALIASES env to force alias-based success only
+            always_strict_aliases = {a.strip().upper() for a in os.getenv('ALWAYS_STRICT_ALIASES', '').split(',') if a.strip()}
+            if target_alias and target_alias.upper() in always_strict_aliases:
+                strict_check = True
+                strict_mode = True  # treat as strict mode for fallback gating
+                print(f"[jump] alias {target_alias} in ALWAYS_STRICT_ALIASES; disabling generic fallback")
+            # Device-driven identity verification enhancements:
+            # identity_verify_commands: list override of commands to run to detect alias/identity
+            # identity_accept_substrings: list of substrings (case-insensitive) ANY of which validate identity
+            id_verify_cmds_cfg = target_device.get('identity_verify_commands') or []
+            if isinstance(id_verify_cmds_cfg, list) and id_verify_cmds_cfg:
+                verify_cmds = id_verify_cmds_cfg
+            id_accept_subs = []
+            cfg_accept = target_device.get('identity_accept_substrings') or []
+            if isinstance(cfg_accept, list):
+                id_accept_subs = [s for s in cfg_accept if isinstance(s, str) and s.strip()]
+
+            executed_ssh_cmds: set[str] = set()
+            final_prompt = None
+            final_host = None
+            alias_verified = False
+            last_attempt_error: Exception | None = None
+            generic_candidate: dict | None = None  # store {'prompt': str, 'host': str} if we see a usable generic prompt
+
+            for attempt, cand_host in enumerate(candidate_hosts, start=1):
+                try:
+                    leg_kex = os.getenv("SSH_LEGACY_KEX", "diffie-hellman-group1-sha1")
+                    leg_hostkeys = os.getenv("SSH_LEGACY_KEY_TYPES", "ssh-rsa")
+                    leg_ciphers = os.getenv("SSH_LEGACY_CIPHERS", "aes128-cbc,3des-cbc,aes192-cbc,aes256-cbc")
+                    leg_macs = os.getenv("SSH_LEGACY_MACS", "hmac-sha1,hmac-sha1-96,hmac-md5,hmac-md5-96")
+                    ssh_cmd_full = (
+                        f"ssh -o KexAlgorithms=+{leg_kex} -o HostKeyAlgorithms=+{leg_hostkeys} "
+                        f"-o Ciphers=+{leg_ciphers} -o MACs=+{leg_macs} "
+                        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout={int(conn_timeout)} {username}@{cand_host}"
+                    )
+                    print(f"[jump-try] candidate={cand_host} attempt={attempt}/{len(candidate_hosts)}")
+                    executed_ssh_cmds.add(ssh_cmd_full)
+                    net_jump.write_channel(ssh_cmd_full + "\n")
                     _sleep(0.6)
-                    buf2 += _read_all(0.8)
-                pass_tries2 = 0
-                while "assword" in buf2 and pass_tries2 < 2 and "denied" not in buf2.lower():
-                    net_jump.write_channel(password + "\n")
-                    pass_tries2 += 1
-                    _sleep(0.9)
-                    buf2 += _read_all(1.2)
-                for line in buf2.splitlines()[::-1]:
-                    l = line.strip()
-                    if l.endswith('#') and (not jump_prompt or l != jump_prompt):
-                        target_prompt = l
+                    buf = _read_all(0.9)
+                    if "Are you sure you want to continue" in buf:
+                        net_jump.write_channel("yes\n")
+                        _sleep(0.6)
+                        buf += _read_all(0.9)
+                    pass_tries = 0
+                    while "assword" in buf and pass_tries < 3 and "denied" not in buf.lower():
+                        net_jump.write_channel(password + "\n")
+                        pass_tries += 1
+                        _sleep(0.9)
+                        buf += _read_all(1.2)
+                        if any(l.strip().endswith('#') for l in buf.splitlines()):
+                            break
+                    # Extract prompt
+                    target_prompt = None
+                    for line in buf.splitlines()[::-1]:
+                        l = line.strip()
+                        if l.endswith('#') and (not jump_prompt or l != jump_prompt):
+                            target_prompt = l
+                            break
+                    if not target_prompt:
+                        net_jump.write_channel("\n")
+                        _sleep(0.5)
+                        extra = _read_all(0.6)
+                        for line in extra.splitlines()[::-1]:
+                            l = line.strip()
+                            if l.endswith('#') and (not jump_prompt or l != jump_prompt):
+                                target_prompt = l
+                                break
+                    if not target_prompt:
+                        # simplified retry
+                        simple_cmd = f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{cand_host}"
+                        executed_ssh_cmds.add(simple_cmd)
+                        net_jump.write_channel(simple_cmd + "\n")
+                        _sleep(0.8)
+                        buf2 = _read_all(1.0)
+                        if "Are you sure you want to continue" in buf2:
+                            net_jump.write_channel("yes\n")
+                            _sleep(0.6)
+                            buf2 += _read_all(0.8)
+                        pass_tries2 = 0
+                        while "assword" in buf2 and pass_tries2 < 2 and "denied" not in buf2.lower():
+                            net_jump.write_channel(password + "\n")
+                            pass_tries2 += 1
+                            _sleep(0.9)
+                            buf2 += _read_all(1.2)
+                        for line in buf2.splitlines()[::-1]:
+                            l = line.strip()
+                            if l.endswith('#') and (not jump_prompt or l != jump_prompt):
+                                target_prompt = l
+                                break
+                    if not target_prompt:
+                        target_prompt = '#'
+
+                    alias_ok = False
+                    if expected_sub and target_prompt:
+                        alias_ok = expected_sub.upper() in target_prompt.upper()
+                    # Identity verification sequence if alias not in prompt
+                    if strict_check and expected_sub and not alias_ok and identity_verify_enabled:
+                        try:
+                            for vcmd in verify_cmds:
+                                net_jump.write_channel(vcmd + "\n")
+                                _sleep(0.7)
+                                ident_out = _read_all(1.0)
+                                ident_upper = ident_out.upper()
+                                expected_upper = expected_sub.upper()
+                                match_expected = expected_upper in ident_upper
+                                match_alt = any(sub.upper() in ident_upper for sub in id_accept_subs)
+                                if match_expected or match_alt:
+                                    alias_ok = True
+                                    alias_verified = True
+                                    print(f"[jump-identity] identity matched via '{vcmd}' (expected={match_expected} alt={match_alt})")
+                                    break
+                        except Exception as ide:
+                            print(f"[jump-identity] verification error: {ide}")
+
+                    if strict_check and expected_sub and not alias_ok:
+                        # Host/IP-based acceptance fallback (if device sets allow_host_identity_fallback=true)
+                        host_id_fallback = bool(target_device.get('allow_host_identity_fallback'))
+                        cand_is_known = cand_host in {target_device.get('loopback'), target_device.get('host')} or cand_host in set(target_device.get('alt_hosts') or [])
+                        if host_id_fallback and cand_is_known:
+                            print(f"[jump-try] candidate={cand_host} alias missing but host matches configured device and host identity fallback enabled -> accepting")
+                            final_prompt = target_prompt
+                            final_host = cand_host
+                            break
+                        print(f"[jump-try] candidate={cand_host} failed alias/prompt check -> trying next")
+                        if generic_candidate is None and target_prompt and target_prompt.strip().endswith('#'):
+                            generic_candidate = {"prompt": target_prompt, "host": cand_host}
+                        continue
+
+                    # Accept generic prompt if relaxed
+                    if not strict_check or not expected_sub:
+                        final_prompt = target_prompt
+                        final_host = cand_host
                         break
-            if not target_prompt:
-                target_prompt = '#'
-            # If we have an expected alias, ensure prompt contains it; otherwise abort to avoid running command on jump device
-            if target_alias:
-                if not (target_prompt and target_alias.upper() in target_prompt.upper()):
-                    raise RuntimeError(f"Did not reach target prompt containing alias {target_alias}; got {target_prompt}")
+                    if expected_sub and alias_ok:
+                        final_prompt = target_prompt
+                        final_host = cand_host
+                        break
+                except Exception as e:
+                    last_attempt_error = e
+                    print(f"[jump-try] candidate={cand_host} exception -> {e}")
+                    continue
+
+            if final_prompt is None:
+                # If strict_mode (incl. strict_prompt) active -> fail hard
+                if strict_mode:
+                    raise RuntimeError(f"Unable to positively identify target device (strict); hosts tried={candidate_hosts}")
+                # Else allow relaxed generic fallback
+                fallback_generic_allowed = allow_generic_env
+                if generic_candidate and fallback_generic_allowed:
+                    print(f"[jump] falling back to generic prompt from host {generic_candidate['host']} (alias verification failed, relaxed mode)")
+                    final_prompt = generic_candidate['prompt']
+                    final_host = generic_candidate['host']
+                else:
+                    raise RuntimeError(f"Unable to reach target device via any candidate host {candidate_hosts}; last_error={last_attempt_error}")
+            if strict_check and expected_sub and expected_sub.upper() not in final_prompt.upper():
+                # If we accepted via host identity fallback earlier, alias_verified flag would be True; check that first.
+                if alias_verified:
+                    print(f"[jump] alias substring absent but identity verified via command output / host fallback")
+                else:
+                    # If strict but device permits host identity fallback and final_host is a configured address, allow.
+                    host_id_fallback = bool(target_device.get('allow_host_identity_fallback'))
+                    if strict_mode and host_id_fallback and final_host in {target_device.get('loopback'), target_device.get('host')} | set(target_device.get('alt_hosts') or []):
+                        print(f"[jump] strict alias missing; permitting due to allow_host_identity_fallback on known host {final_host}")
+                    elif strict_mode:
+                        raise RuntimeError(f"Did not reach target prompt containing alias {expected_sub}; last prompt {final_prompt}")
+                    elif allow_generic_env:
+                        print(f"[jump] proceeding with generic prompt final={final_prompt} without alias (non-strict relaxed)")
+                    else:
+                        raise RuntimeError(f"Did not reach target prompt containing alias {expected_sub}; last prompt {final_prompt}")
+            target_prompt = final_prompt
+            target_host = final_host or target_host
             # Disable paging
             net_jump.write_channel("terminal length 0\n")
             _sleep(0.4)
@@ -909,7 +1106,7 @@ class NetworkCommandAPIView(APIView):
                     break
                 if s.strip().startswith('% Invalid input'):
                     continue
-                if s.strip() == ssh_cmd:
+                if s.strip() in executed_ssh_cmds:
                     continue
                 if jump_prompt and s.strip() == jump_prompt:
                     continue
