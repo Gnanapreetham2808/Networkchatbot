@@ -500,6 +500,41 @@ class NetworkCommandAPIView(APIView):
             "port": 23,
         }
 
+        # Build ordered candidate list (loopbacks first) once here so both initial and retry logic share it.
+        ordered_candidates: list[str] = []
+        if resolved_device_dict:
+            loopbacks_any = []
+            try:
+                if isinstance(resolved_device_dict.get('loopbacks'), list):
+                    loopbacks_any = [lb for lb in resolved_device_dict.get('loopbacks') if lb]
+                elif resolved_device_dict.get('loopback'):
+                    # legacy single loopback value
+                    lv = resolved_device_dict.get('loopback')
+                    if isinstance(lv, str):
+                        loopbacks_any = [lv]
+            except Exception:
+                pass
+            primary_host_initial = device_ip
+            alt_hosts_any = []
+            try:
+                alt_hosts_any = [h for h in (resolved_device_dict.get('alt_hosts') or []) if h]
+            except Exception:
+                alt_hosts_any = []
+            # Compose order: loopbacks -> primary host -> alt hosts (deduplicated)
+            for h in loopbacks_any:
+                if h and h not in ordered_candidates:
+                    ordered_candidates.append(h)
+            if primary_host_initial and primary_host_initial not in ordered_candidates:
+                ordered_candidates.append(primary_host_initial)
+            for h in alt_hosts_any:
+                if h and h not in ordered_candidates:
+                    ordered_candidates.append(h)
+            if ordered_candidates:
+                device_ip = ordered_candidates[0]
+                ssh_device['host'] = device_ip
+                telnet_device['host'] = device_ip
+                print(f"[NetworkCommandAPIView] connection candidates (loopbacks-first)={ordered_candidates}")
+
         net_connect = None
         last_err = None
         if prefer_telnet and telnet_permitted:
@@ -540,34 +575,26 @@ class NetworkCommandAPIView(APIView):
             elif net_connect is None and not telnet_permitted:
                 print("[NetworkCommandAPIView] telnet disabled -> no telnet fallback")
 
-        if net_connect is None:
-            # If device has alt_hosts, try them sequentially before giving up
-            alt_hosts = []
-            if resolved_device_dict:
-                try:
-                    alt_hosts = resolved_device_dict.get("alt_hosts") or []
-                except Exception:
-                    alt_hosts = []
-            tried_alt = False
-            for alt in alt_hosts:
-                if not alt or alt == device_ip:
+        if net_connect is None and ordered_candidates:
+            # Iterate remaining candidates after the first one
+            for cand_host in ordered_candidates[1:]:
+                if not cand_host or cand_host == device_ip:
                     continue
-                tried_alt = True
-                print(f"[NetworkCommandAPIView] primary host connect failed -> trying alt host {alt}")
-                ssh_device["host"] = alt
-                telnet_device["host"] = alt
+                print(f"[NetworkCommandAPIView] trying next candidate host {cand_host}")
+                ssh_device['host'] = cand_host
+                telnet_device['host'] = cand_host
                 try:
                     net_connect = ConnectHandler(**ssh_device)
                     if net_connect:
-                        device_ip = alt  # update to working alt
+                        device_ip = cand_host
                         break
                 except Exception as e:
                     last_err = e
-                    print(f"[NetworkCommandAPIView] alt host ssh failed -> {e}")
-            # restore ssh_device host if all failed
+                    print(f"[NetworkCommandAPIView] candidate host ssh failed -> {e}")
             if net_connect is None:
-                ssh_device["host"] = device_ip
-                telnet_device["host"] = device_ip
+                # restore to first candidate for consistency
+                ssh_device['host'] = ordered_candidates[0]
+                telnet_device['host'] = ordered_candidates[0]
 
         if net_connect is None:
             # If strategy jump_only and we already attempted jump path earlier, do not proceed to legacy direct attempts.

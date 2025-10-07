@@ -153,8 +153,15 @@ def _lazy_load():
         if _MODEL is not None:
             return
         global _CHOSEN_MODEL_DIR
-        # Try adapter-based loading first if adapter present and peft available
-        adapter_dir = _find_adapter_dir()
+        # Environment controls:
+        #  CLI_DISABLE_ADAPTER=1 -> skip adapter even if found
+        #  CLI_REQUIRE_ADAPTER=1 -> error if adapter cannot be applied
+        disable_adapter = os.getenv("CLI_DISABLE_ADAPTER", "0") == "1"
+        require_adapter = os.getenv("CLI_REQUIRE_ADAPTER", "0") == "1"
+
+        adapter_dir = None if disable_adapter else _find_adapter_dir()
+
+        # Try adapter-based loading first if adapter present and peft available and not disabled
         if adapter_dir and _PEFT_AVAILABLE:
             base_hint = os.getenv("CLI_BASE_MODEL_PATH")
             base_model: Optional[Path] = None
@@ -212,8 +219,10 @@ def _lazy_load():
             else:
                 # If adapter exists but no local base, do not auto-download; instruct via error in predict
                 _CHOSEN_MODEL_DIR = adapter_dir
-                _TOKENIZER = None  # will error later with guidance
+                _TOKENIZER = None
                 _MODEL = None
+                if require_adapter:
+                    raise RuntimeError("Adapter base model missing and CLI_REQUIRE_ADAPTER=1")
         # Fallback: full model directory
         _CHOSEN_MODEL_DIR = _select_model_dir()
         print(f"[nlp_model] Loading model from {_CHOSEN_MODEL_DIR}")
@@ -222,7 +231,10 @@ def _lazy_load():
         device = os.getenv("CLI_MODEL_DEVICE", "cpu")
         _MODEL.to(device)
         _MODEL.eval()
-        print(f"[nlp_model] Model loaded on device={device}")
+        if adapter_dir and not _PEFT_AVAILABLE and require_adapter:
+            raise RuntimeError("peft not installed but CLI_REQUIRE_ADAPTER=1")
+        origin = "(adapter skipped)" if disable_adapter and adapter_dir else ""
+        print(f"[nlp_model] Model loaded on device={device} {origin}")
 
 
 def predict_cli(query: str) -> str:

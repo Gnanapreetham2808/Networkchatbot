@@ -1,8 +1,7 @@
 {
   "INVIJB1SW1": {
     "host": "192.168.10.1",
-    "alt_hosts": ["10.1.1.1"],
-    "loopback": null,
+    "loopbacks": ["10.1.1.1"],
     "connection_strategy": "direct",
     "prompt_contains": "INVIJB1SW1",
     "username": "admin",
@@ -13,6 +12,7 @@
   },
   "UKLONB1SW2": { 
     "host": "192.168.30.1",
+    "loopbacks": ["10.1.1.2"],
     "username": "admin",
     "device_type": "cisco_ios",
     "password": "Preetham",
