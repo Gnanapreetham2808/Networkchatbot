@@ -73,6 +73,8 @@ _PHRASE_MAP = {
     re.compile(r"vijayawada\s+building\s*1\s+switch\s*1", re.I): "INVIJB1SW1",
     # Generic building 1 with no explicit city defaults to Vijayawada primary
     re.compile(r"\bbuilding\s*1\b", re.I): "INVIJB1SW1",
+    # Hyderabad Building 3 Switch 3
+    re.compile(r"hyderabad\s+building\s*3\s+switch\s*3", re.I): "INHYDB3SW3",
 }
 
 # Simple location keyword to alias preference (fallback when no explicit alias)
@@ -80,10 +82,14 @@ _LOCATION_KEYWORDS = [
     # Expanded Vijayawada synonyms (short forms or partials) map to primary alias
     (re.compile(r"\b(vij|vijay|vijaya|vijayawada|india)\b", re.I), "INVIJB1SW1"),
     (re.compile(r"\b(london|uk)\b", re.I), "UKLONB1SW2"),
+    # Aruba/HPE references map to Hyderabad Aruba switch
+    (re.compile(r"\b(aruba|hp|hewlett)\b", re.I), "INHYDB3SW3"),
+    # Hyderabad shortcuts
+    (re.compile(r"\b(hyd|hyderabad)\b", re.I), "INHYDB3SW3"),
 ]
 
 # Known location keys for fuzzy matching
-_FUZZY_KEYS = ["london", "uk", "vijayawada", "vij", "vijay", "vijaya", "building 1"]
+_FUZZY_KEYS = ["london", "uk", "vijayawada", "vij", "vijay", "vijaya", "building 1", "aruba", "hp", "hyd", "hyderabad", "building 3"]
 
 
 def _attach_alias(alias: str, dev: dict | None) -> Optional[dict]:
@@ -114,6 +120,18 @@ def _best_in_alias(devices: Dict[str, dict]) -> Optional[str]:
         return "INVIJB1SW1"
     for k in devices.keys():
         if k.startswith("INVIJB1SW"):
+            return k
+    return None
+
+
+def _best_aruba_alias(devices: Dict[str, dict]) -> Optional[str]:
+    # Prefer explicitly vendor=aruba; now expect INHYDB3SW3 as primary Aruba
+    for alias, dev in devices.items():
+        if str(dev.get("vendor", "")).lower().startswith("aruba"):
+            return alias
+    # Fallback: any alias starting with INHYD or ARU
+    for k in devices.keys():
+        if k.startswith("INHYD") or k.startswith("ARU"):
             return k
     return None
 
@@ -204,21 +222,31 @@ def resolve_device(query: str) -> Tuple[Optional[dict], List[str], Optional[str]
             mapped_aliases.append("UKLONB1SW2")
         elif key in ("vijayawada", "vij", "vijay", "vijaya", "building 1"):
             mapped_aliases.append("INVIJB1SW1")
+        elif key in ("aruba", "hp"):
+            mapped_aliases.append("INHYDB3SW3")
+        elif key in ("hyd", "hyderabad", "building 3"):
+            mapped_aliases.append("INHYDB3SW3")
 
     # Reduce to single site if both UK and IN appear -> ambiguous
     mapped_aliases = list(dict.fromkeys(mapped_aliases))  # dedupe preserve order
     if len(mapped_aliases) == 1:
         target = mapped_aliases[0]
         if target not in devices:
-            # fallback within site
-            target = _best_uk_alias(devices) if target.startswith("UK") else _best_in_alias(devices)
+            # fallback within site/vendor
+            if target.startswith("UK"):
+                target = _best_uk_alias(devices)
+            elif target.startswith("IN"):
+                target = _best_in_alias(devices)
+            elif target.startswith("ARU"):
+                target = _best_aruba_alias(devices)
         if target and target in devices:
             return _attach_alias(target, devices[target]), [], None
     elif len(mapped_aliases) > 1:
-        # both regions mentioned -> offer candidates from both sites
+        # both regions mentioned -> offer candidates from both sites/vendors
         uk = _best_uk_alias(devices)
         inv = _best_in_alias(devices)
-        cand = [a for a in [uk, inv] if a]
+        aru = _best_aruba_alias(devices)
+        cand = [a for a in [uk, inv, aru] if a]
         return None, cand or list(devices.keys()), "Multiple location matches"
 
     # 5. Simple location keyword preference (exact)
@@ -227,14 +255,20 @@ def resolve_device(query: str) -> Tuple[Optional[dict], List[str], Optional[str]
     if len(matched) == 1:
         alias = matched[0]
         if alias not in devices:
-            alias = _best_uk_alias(devices) if alias.startswith("UK") else _best_in_alias(devices)
+            if alias.startswith("UK"):
+                alias = _best_uk_alias(devices)
+            elif alias.startswith("IN"):
+                alias = _best_in_alias(devices)
+            elif alias.startswith("ARU"):
+                alias = _best_aruba_alias(devices)
         if alias and alias in devices:
             return _attach_alias(alias, devices[alias]), [], None
     if len(matched) > 1:
         # multiple locations mentioned
         uk = _best_uk_alias(devices)
         inv = _best_in_alias(devices)
-        cand = [a for a in [uk, inv] if a]
+        aru = _best_aruba_alias(devices)
+        cand = [a for a in [uk, inv, aru] if a]
         return None, cand or list(devices.keys()), "Multiple location matches"
 
     return None, [], "No matching device"

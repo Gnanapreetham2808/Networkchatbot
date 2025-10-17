@@ -6,6 +6,7 @@
     "prompt_contains": "INVIJB1SW1",
     "username": "admin",
     "device_type": "cisco_ios",
+    "vendor": "cisco",
     "password": "cisco",
     "strict_prompt": false,
     "port": 22
@@ -15,7 +16,18 @@
     "loopbacks": ["10.1.1.2"],
     "username": "admin",
     "device_type": "cisco_ios",
+    "vendor": "cisco",
     "password": "Preetham",
+    "port": 22
+  },
+  "INHYDB3SW3": {
+    "host": "192.168.50.3",
+    "connection_strategy": "direct",
+    "prompt_contains": "INHYDB3SW3",
+    "username": "admin",
+    "device_type": "aruba_aoscx",
+    "vendor": "aruba",
+    "password": "admin",
     "port": 22
   }
 }

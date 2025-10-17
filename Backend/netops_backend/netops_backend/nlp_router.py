@@ -1,0 +1,172 @@
+"""Provider-agnostic CLI prediction router.
+
+Selects between the local finetuned T5 (nlp_model.predict_cli) and external LLMs
+(OpenAI or a generic HTTP endpoint) based on environment variables.
+
+Environment:
+    CLI_LLM_PROVIDER   = local | openai | http
+    CLI_LLM_MODEL      = provider-specific model name (e.g., gpt-4o-mini)
+    CLI_LLM_BASE_URL   = base URL for generic HTTP provider
+  CLI_LLM_TIMEOUT    = request timeout in seconds (default 15)
+  CLI_LLM_SYSTEM_PROMPT = optional custom system prompt
+  OPENAI_API_KEY     = required if provider=openai
+
+Behavior:
+  - Returns a single line CLI command as string, or an error string prefixed with [Error]
+  - Strips code fences/backticks and extra commentary if present
+"""
+from __future__ import annotations
+
+import os
+import json
+from typing import Optional
+
+from .nlp_model import predict_cli as _local_predict
+
+try:
+    import requests  # type: ignore
+except Exception:  # pragma: no cover
+    requests = None  # fallback to urllib if requests missing
+
+def _http_post(url: str, headers: dict, payload: dict, timeout: float) -> tuple[int, str]:
+    """POST JSON and return (status_code, text). Uses requests if available, else urllib."""
+    if requests is not None:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)  # type: ignore
+        return resp.status_code, resp.text
+    # Fallback: urllib
+    import urllib.request
+    import urllib.error
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", **headers}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # type: ignore
+            return getattr(r, "status", 200), r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:  # type: ignore
+        return e.code, e.read().decode("utf-8")
+    except Exception as e:  # type: ignore
+        return 599, str(e)
+
+
+def _sanitize_cli(text: str) -> str:
+    """Normalize LLM text to a single line CLI command without backticks or commentary."""
+    if not text:
+        return ""
+    t = text.strip()
+    # remove surrounding code fences/backticks
+    if t.startswith("```") and t.endswith("```"):
+        t = t.strip("`")
+    t = t.strip().strip("`")
+    # take the first non-empty line
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    cmd = lines[0]
+    # remove leading common prefixes
+    for prefix in ("Command:", "CLI:", "Answer:", "Output:"):
+        if cmd.lower().startswith(prefix.lower()):
+            cmd = cmd[len(prefix):].strip()
+    # Remove surrounding quotes
+    if (cmd.startswith("\"") and cmd.endswith("\"")) or (cmd.startswith("'") and cmd.endswith("'")):
+        cmd = cmd[1:-1].strip()
+    return cmd
+
+
+def _system_prompt() -> str:
+    default = (
+        "You are a precise network CLI assistant. Given a natural language request, "
+        "output exactly one Cisco IOS show command that best answers it. "
+        "Return ONLY the command text, with no quotes or explanations."
+    )
+    return os.getenv("CLI_LLM_SYSTEM_PROMPT", default)
+
+
+def _predict_via_openai(query: str, model: Optional[str] = None, system: Optional[str] = None) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return "[Error] OPENAI_API_KEY not set"
+    model = model or os.getenv("CLI_LLM_MODEL", "gpt-4o-mini")
+    url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")
+    timeout = float(os.getenv("CLI_LLM_TIMEOUT", "15"))
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": (system or _system_prompt())},
+            {"role": "user", "content": f"Request: {query}\nReturn only one CLI command."},
+        ],
+        "temperature": 0.0,
+        "n": 1,
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    status_code, text = _http_post(url, headers, payload, timeout)
+    if status_code >= 400:
+        return f"[Error] OpenAI HTTP {status_code}: {text[:2000]}"
+    try:
+        data = json.loads(text)
+        content = data["choices"][0]["message"]["content"]
+        return _sanitize_cli(content)
+    except Exception as e:
+        return f"[Error] OpenAI parse failure: {e} | raw={text[:1000]}"
+
+
+
+
+def _predict_via_generic_http(query: str, model: Optional[str] = None, system: Optional[str] = None) -> str:
+    base = os.getenv("CLI_LLM_BASE_URL")
+    if not base:
+        return "[Error] CLI_LLM_BASE_URL not set for http provider"
+    timeout = float(os.getenv("CLI_LLM_TIMEOUT", "15"))
+    url = base.rstrip("/")
+    payload = {
+        "query": query,
+        "system": (system or _system_prompt()),
+        "mode": "cli_command",
+        "model": model or os.getenv("CLI_LLM_MODEL"),
+    }
+    headers = {"Content-Type": "application/json"}
+    status_code, text = _http_post(url, headers, payload, timeout)
+    if status_code >= 400:
+        return f"[Error] HTTP {status_code}: {text[:2000]}"
+    try:
+        data = json.loads(text)
+        content = data.get("text") or data.get("content") or data.get("answer")
+        if not content:
+            return f"[Error] Generic HTTP response missing 'text' | raw={text[:1000]}"
+        return _sanitize_cli(content)
+    except Exception as e:
+        return f"[Error] HTTP parse failure: {e} | raw={text[:1000]}"
+
+
+def predict_cli(query: str) -> str:
+    """Predict a CLI command via configured provider.
+
+    Falls back to local finetuned model if provider unset or set to 'local'.
+    """
+    provider = (os.getenv("CLI_LLM_PROVIDER", "local") or "local").lower()
+    if provider in ("", "local"):
+        return _local_predict(query)
+    if not query or not query.strip():
+        return "[Error] Empty query"
+    if provider == "openai":
+        return _predict_via_openai(query)
+    if provider == "http":
+        return _predict_via_generic_http(query)
+    return f"[Error] Unknown CLI_LLM_PROVIDER={provider}"
+
+
+def predict_cli_provider(query: str, provider: Optional[str] = None, model: Optional[str] = None, system_prompt: Optional[str] = None) -> str:
+    """Predict a CLI command with an explicit provider/model override.
+
+    provider: local | openai | http
+    model: optional provider-specific model name (e.g., gpt-4o-mini)
+    system_prompt: optional custom system prompt
+    """
+    prov = (provider or os.getenv("CLI_LLM_PROVIDER", "local") or "local").lower()
+    if prov in ("", "local"):
+        return _local_predict(query)
+    if not query or not query.strip():
+        return "[Error] Empty query"
+    if prov == "openai":
+        return _predict_via_openai(query, model=model, system=system_prompt)
+    if prov == "http":
+        return _predict_via_generic_http(query, model=model, system=system_prompt)
+    return f"[Error] Unknown CLI_LLM_PROVIDER={prov}"

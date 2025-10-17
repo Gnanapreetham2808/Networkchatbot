@@ -1,0 +1,51 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django/SQLite
+db.sqlite3
+db.sqlite3-journal
+
+# Environments / secrets
+.env
+.venv/
+venv/
+ENV/
+
+# IDE / tooling
+.vscode/
+.idea/
+
+# Logs / caches
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+
+# Node (if any local tooling)
+node_modules/
+
+# Model artifacts (do not commit fine-tuned weights or training outputs)
+chatbot/nlp_engine/**/model.safetensors
+chatbot/nlp_engine/**/adapter_model.safetensors
+chatbot/nlp_engine/**/training_args.bin
+chatbot/nlp_engine/**/generation_config.json
+chatbot/nlp_engine/**/tokenizer.json
+chatbot/nlp_engine/**/tokenizer_config.json
+chatbot/nlp_engine/**/special_tokens_map.json
+chatbot/nlp_engine/**/spiece.model
+chatbot/nlp_engine/**/desktop.ini
+
+# Generic large/binary patterns
+*.safetensors
+*.bin
+*.pt
+*.onnx
+*.pb
+*.h5
+
+# OS files
+.DS_Store
+Thumbs.db

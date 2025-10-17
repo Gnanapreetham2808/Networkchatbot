@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from .nlp_model import predict_cli
+from .nlp_router import predict_cli
 
 
 class NetworkCommandAPIView(APIView):

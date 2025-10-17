@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils.decorators import method_decorator
+import re
 from django.views.decorators.csrf import csrf_exempt
 import os
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
@@ -12,7 +13,7 @@ try:
 except Exception:
     paramiko = None  # fallback if not available
 
-from netops_backend.nlp_model import predict_cli
+from netops_backend.nlp_router import predict_cli, predict_cli_provider
 from .models import Conversation, Message
 import subprocess
 from functools import lru_cache
@@ -403,7 +404,69 @@ class NetworkCommandAPIView(APIView):
                         # Do not attempt direct connection for jump_only strategy
                         return Response({"error": "Unable to connect to device via jump host"}, status=502)
 
-        cli_command = predict_cli(query)
+        # Vendor-aware CLI prediction: Cisco -> local T5/LoRA, Aruba -> OpenAI (gpt-4o-mini/gpt-5o-mini)
+        vendor = (resolved_device_dict or {}).get("vendor") or (resolved_device_dict or {}).get("device_type") or ""
+        vendor_l = str(vendor).lower()
+        # Environment overrides (optional)
+        # Aruba always uses OpenAI per requirement (ignore env override)
+        aruba_provider = "openai"
+        aruba_model = os.getenv("ARUBA_LLM_MODEL", os.getenv("CLI_LLM_MODEL", "gpt-4o-mini"))
+        cisco_provider = os.getenv("CISCO_LLM_PROVIDER", "local")
+
+        if "aruba" in vendor_l or "hp" in vendor_l or "hewlett" in vendor_l:
+            # Strip location words for OpenAI so it focuses on the intent, not site names
+            loc_pattern = re.compile(r"\b(uk|london|gb|india|in|vijayawada|hyderabad|hyderabaad|hyd|lab|aruba)\b", re.I)
+            sanitized_query = loc_pattern.sub("", query).strip()
+            # Default Aruba prompt if not provided in env
+            aruba_system = os.getenv(
+                "ARUBA_SYSTEM_PROMPT",
+                "You are a precise network CLI assistant. Given a natural language request, output exactly one Aruba AOS-CX show command that best answers it. Ignore any location words (like city or site). Return ONLY the command text."
+            )
+            cli_command = predict_cli_provider(
+                sanitized_query or query,
+                provider=aruba_provider,
+                model=aruba_model,
+                system_prompt=aruba_system,
+            )
+            # Fallback: if OpenAI Aruba model fails, try OpenAI with Cisco system prompt
+            if (not cli_command) or cli_command.startswith("[Error]"):
+                cisco_fallback_provider = os.getenv("ARUBA_FALLBACK_PROVIDER", "openai")
+                cisco_fallback_model = os.getenv("ARUBA_FALLBACK_MODEL", os.getenv("CLI_LLM_MODEL", "gpt-4o-mini"))
+                cisco_system = os.getenv(
+                    "CISCO_SYSTEM_PROMPT",
+                    "You are a precise network CLI assistant. Given a natural language request, output exactly one Cisco IOS show command that best answers it. Return ONLY the command text, with no quotes or explanations."
+                )
+                cli_command = predict_cli_provider(
+                    sanitized_query or query,
+                    provider=cisco_fallback_provider,
+                    model=cisco_fallback_model,
+                    system_prompt=cisco_system,
+                )
+        else:
+            # default Cisco/local
+            cli_command = predict_cli_provider(
+                query,
+                provider=cisco_provider,
+                model=os.getenv("CISCO_LLM_MODEL"),
+                system_prompt=os.getenv("CISCO_SYSTEM_PROMPT")
+            )
+            # Cisco fallback: if local or configured provider fails, try OpenAI with Cisco prompt
+            if (not cli_command) or cli_command.startswith("[Error]"):
+                # sanitize for OpenAI
+                loc_pattern = re.compile(r"\b(uk|london|gb|india|in|vijayawada|hyderabad|hyderabaad|hyd|lab|aruba)\b", re.I)
+                sanitized_query = loc_pattern.sub("", query).strip()
+                cisco_fallback_provider = os.getenv("CISCO_FALLBACK_PROVIDER", "openai")
+                cisco_fallback_model = os.getenv("CISCO_FALLBACK_MODEL", os.getenv("CLI_LLM_MODEL", "gpt-4o-mini"))
+                cisco_system = os.getenv(
+                    "CISCO_SYSTEM_PROMPT",
+                    "You are a precise network CLI assistant. Given a natural language request, output exactly one Cisco IOS show command that best answers it. Return ONLY the command text, with no quotes or explanations."
+                )
+                cli_command = predict_cli_provider(
+                    sanitized_query or query,
+                    provider=cisco_fallback_provider,
+                    model=cisco_fallback_model,
+                    system_prompt=cisco_system,
+                )
         print(f"[NetworkCommandAPIView] predicted_cli={cli_command}")
         if not cli_command or cli_command.startswith("[Error]"):
             return Response({"error": "Failed to run command", "session_id": session_id}, status=500)
@@ -1178,14 +1241,21 @@ class DeviceLocationAPIView(APIView):
     FALLBACK_COORDS = {
         "UKLONB1SW2": {"lat": 51.5072, "lng": -0.1276, "label": "UK - London"},
         "INVIJB1SW1": {"lat": 16.5062, "lng": 80.6480, "label": "India - Vijayawada"},
+        "INHYDB3SW3": {"lat": 17.3850, "lng": 78.4867, "label": "India - Hyderabad (B3 SW3)"},
     }
 
     SITE_ALIAS_PREF = {
         "uk": ["UKLONB1SW2"],
         "london": ["UKLONB1SW2"],
-        "in": ["INVIJB1SW1"],
-        "india": ["INVIJB1SW1"],
+        # India should include both Vijayawada and Hyderabad
+        "in": ["INVIJB1SW1", "INHYDB3SW3"],
+        "india": ["INVIJB1SW1", "INHYDB3SW3"],
         "vijayawada": ["INVIJB1SW1"],
+        "hyd": ["INHYDB3SW3"],
+        "hyderabad": ["INHYDB3SW3"],
+        "hyderabaad": ["INHYDB3SW3"],
+        "lab": ["INHYDB3SW3"],
+        "aruba": ["INHYDB3SW3"],
     }
 
     def get(self, request):
@@ -1196,32 +1266,41 @@ class DeviceLocationAPIView(APIView):
         used_aliases = set()
         for site in requested_sites:
             prefs = self.SITE_ALIAS_PREF.get(site, [])
-            alias = None
-            for cand in prefs:
-                if cand in devices_map:
-                    alias = cand
-                    break
-            if not alias:
+            # collect all valid candidates for this site
+            valid_aliases = [cand for cand in prefs if cand in devices_map]
+            # fallback if none matched explicitly
+            if not valid_aliases:
                 if site in ("uk", "london"):
                     alias = next((a for a in devices_map.keys() if a.startswith("UKLONB")), None) or next((a for a in devices_map.keys() if a.startswith("UK")), None)
+                    if alias:
+                        valid_aliases.append(alias)
                 elif site in ("in", "india", "vijayawada"):
-                    alias = next((a for a in devices_map.keys() if a.startswith("INVIJB1SW")), None) or next((a for a in devices_map.keys() if a.startswith("IN")), None)
-            if not alias or alias in used_aliases:
-                continue
-            used_aliases.add(alias)
-            dev = devices_map.get(alias, {})
-            lat = dev.get("lat") or dev.get("latitude")
-            lng = dev.get("lng") or dev.get("longitude")
-            fb = self.FALLBACK_COORDS.get(alias)
-            if (lat is None or lng is None) and fb:
-                lat = fb["lat"]
-                lng = fb["lng"]
-            label = (fb and fb.get("label")) or alias
-            chosen.append({
-                "alias": alias,
-                "site": site,
-                "lat": lat,
-                "lng": lng,
-                "label": label,
-            })
+                    vij = next((a for a in devices_map.keys() if a.startswith("INVIJB1SW")), None)
+                    hyd = next((a for a in devices_map.keys() if a.startswith("INHYDB3SW")), None)
+                    for a in [vij, hyd, next((a for a in devices_map.keys() if a.startswith("IN")), None)]:
+                        if a and a not in valid_aliases:
+                            valid_aliases.append(a)
+                elif site in ("hyd", "hyderabad", "hyderabaad", "lab", "aruba"):
+                    alias = next((a for a in devices_map.keys() if a.startswith("INHYDB3SW")), None)
+                    if alias:
+                        valid_aliases.append(alias)
+            for alias in valid_aliases:
+                if not alias or alias in used_aliases:
+                    continue
+                used_aliases.add(alias)
+                dev = devices_map.get(alias, {})
+                lat = dev.get("lat") or dev.get("latitude")
+                lng = dev.get("lng") or dev.get("longitude")
+                fb = self.FALLBACK_COORDS.get(alias)
+                if (lat is None or lng is None) and fb:
+                    lat = fb["lat"]
+                    lng = fb["lng"]
+                label = (fb and fb.get("label")) or alias
+                chosen.append({
+                    "alias": alias,
+                    "site": site,
+                    "lat": lat,
+                    "lng": lng,
+                    "label": label,
+                })
         return Response({"locations": chosen}, status=200)
