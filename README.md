@@ -6,6 +6,13 @@ Natural Language → CLI network automation platform with a Django REST backend,
 
 This project enables network administrators to interact with devices using natural language queries. The backend uses Django REST Framework and a local T5 model to convert queries to CLI commands, resolves device aliases, and executes commands via telnet. The frontend (Next.js) provides chat and admin dashboards.
 
+Recent updates:
+- Vendor-aware routing:
+  - Aruba/HPE → OpenAI (always)
+  - Cisco → local model first; fallback to OpenAI (Cisco prompt) on failure
+- Location stripping for OpenAI (uk, london, india, in, vijayawada, hyderabad, hyderabaad, hyd, lab, aruba) so prompts focus on intent
+- Globe API now returns Hyderabad; `sites=in` returns both Vijayawada and Hyderabad
+
 ## 📋 Current Status
 
 ### ✅ Key Features
@@ -62,10 +69,11 @@ git clone <repository-url>
 cd Networkchatbot
 python -m venv .venv
 .venv\Scripts\activate
-cd Backend
-pip install -r requirements.txt
-cd netops_backend
-python manage.py runserver
+pip install -r Backend\requirements.txt
+cd Backend\netops_backend
+..\..\nautobot-venv\Scripts\python.exe manage.py runserver 8000
+# or if your venv is active:
+# python manage.py runserver 8000
 ```
 
 ### Frontend Setup
@@ -92,6 +100,21 @@ Backend (Django) example `.env` (NOT committed):
 ```
 DISABLE_AUTH=1               # For development only
 DEVICES_RELOAD_EACH_REQUEST=0
+
+# Aruba → OpenAI (always)
+ARUBA_LLM_MODEL=gpt-5o-mini
+# Optional Aruba prompt
+# ARUBA_SYSTEM_PROMPT=You are a precise network CLI assistant... (AOS-CX)
+
+# Cisco local first; fallback to OpenAI if local fails
+CISCO_FALLBACK_PROVIDER=openai
+CISCO_FALLBACK_MODEL=gpt-4o-mini
+# Optional Cisco prompt
+# CISCO_SYSTEM_PROMPT=You are a precise network CLI assistant... (Cisco IOS)
+
+# OpenAI
+OPENAI_API_KEY=sk-...
+CLI_LLM_TIMEOUT=15
 ```
 
 ## 📦 Dependencies
@@ -110,7 +133,7 @@ DEVICES_RELOAD_EACH_REQUEST=0
 - Globe visualization: `globe.gl`, `three`
 
 ### Globe Visualization & Device Locations
-The `/globe` page renders a 3D Earth (Three.js + `globe.gl`). Device geographic markers come from the frontend API route: `GET /api/device-location?sites=uk,in`.
+The `/globe` page renders a 3D Earth (Three.js + `globe.gl`). Device markers come from the frontend API route: `GET /api/device-location?sites=uk,in`.
 
 `/api/device-location` server route logic:
 1. Reads `sites` query (comma-separated aliases or regions).
@@ -126,6 +149,10 @@ The `/globe` page renders a 3D Earth (Three.js + `globe.gl`). Device geographic 
     "meta": { "attempts": [ { "url": "http://localhost:8000/device-locations/?sites=uk,in", "ok": true, "status": 200 } ], "elapsed_ms": 42 } }
   ```
 5. On failure, differentiates between network (500) and non-OK backend responses (502) with a detailed `attempts` array.
+
+Hyderabad support:
+- `sites=uk,in` returns UK + both India markers (Vijayawada and Hyderabad)
+- `sites=uk,hyderabad` forces UK ↔ Hyderabad arc (typo `hyderabaad` also accepted)
 
 Coordinate fallback: If a device record lacks `lat/lng`, predefined site defaults fill in (see `DeviceLocationAPIView.FALLBACK_COORDS`).
 
@@ -215,4 +242,4 @@ MIT License (add details as needed)
 ---
 
 **Status**: 🟡 In Development  
-**Last Updated**: October 2, 2025 (device-location API resiliency, repo cleanup)
+**Last Updated**: October 17, 2025 (Aruba→OpenAI, Cisco fallback, Hyderabad globe)
