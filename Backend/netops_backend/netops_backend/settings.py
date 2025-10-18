@@ -256,3 +256,35 @@ LOGGING = {
 
 # Ensure logs directory exists
 os.makedirs(os.path.join(BASE_DIR.parent, 'logs'), exist_ok=True)
+
+# ==========================================================================================
+# EMAIL CONFIGURATION
+# ==========================================================================================
+# Email backend for sending alerts from health monitoring system
+# For development: Use console backend to print emails to console
+# For production: Use SMTP backend to send real emails
+
+EMAIL_BACKEND = os.getenv(
+    'EMAIL_BACKEND',
+    'django.core.mail.backends.console.EmailBackend'  # Development default
+)
+
+# SMTP Configuration (for production)
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', '1') == '1'
+EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', '0') == '1'
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', '10'))
+
+# Default from email for alerts
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'netops-alerts@example.com')
+SERVER_EMAIL = os.getenv('SERVER_EMAIL', DEFAULT_FROM_EMAIL)
+
+# Alert email recipients (comma-separated list)
+ALERT_EMAIL_RECIPIENTS = [
+    email.strip() 
+    for email in os.getenv('ALERT_EMAIL_RECIPIENTS', '').split(',') 
+    if email.strip()
+]
