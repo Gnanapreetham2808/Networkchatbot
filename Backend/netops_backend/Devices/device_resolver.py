@@ -13,9 +13,12 @@ from __future__ import annotations
 import json
 import re
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Tuple, List, Optional
 import difflib
+
+logger = logging.getLogger(__name__)
 
 _BASE = Path(__file__).resolve().parent
 _DEVICES_PATH = _BASE / "devices.json"

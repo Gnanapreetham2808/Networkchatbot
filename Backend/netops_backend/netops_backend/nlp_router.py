@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import os
 import json
+import logging
 from typing import Optional
 
 from .nlp_model import predict_cli as _local_predict
+
+logger = logging.getLogger(__name__)
 
 try:
     import requests  # type: ignore
@@ -81,8 +84,11 @@ def _system_prompt() -> str:
 
 
 def _predict_via_openai(query: str, model: Optional[str] = None, system: Optional[str] = None) -> str:
+    import time
+    start_time = time.time()
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
+        logger.error("OpenAI API key missing")
         return "[Error] OPENAI_API_KEY not set"
     model = model or os.getenv("CLI_LLM_MODEL", "gpt-4o-mini")
     url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")
@@ -98,13 +104,33 @@ def _predict_via_openai(query: str, model: Optional[str] = None, system: Optiona
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     status_code, text = _http_post(url, headers, payload, timeout)
+    duration_ms = (time.time() - start_time) * 1000
+    
     if status_code >= 400:
+        logger.error("OpenAI API request failed", extra={
+            'status_code': status_code,
+            'query': query[:100],
+            'duration_ms': duration_ms,
+            'error': text[:500]
+        })
         return f"[Error] OpenAI HTTP {status_code}: {text[:2000]}"
     try:
         data = json.loads(text)
         content = data["choices"][0]["message"]["content"]
-        return _sanitize_cli(content)
+        result = _sanitize_cli(content)
+        logger.info("OpenAI prediction completed", extra={
+            'query': query[:100],
+            'predicted_cli': result,
+            'model': model,
+            'duration_ms': duration_ms
+        })
+        return result
     except Exception as e:
+        logger.error("OpenAI response parse failed", extra={
+            'query': query[:100],
+            'error': str(e),
+            'response_preview': text[:500]
+        }, exc_info=True)
         return f"[Error] OpenAI parse failure: {e} | raw={text[:1000]}"
 
 

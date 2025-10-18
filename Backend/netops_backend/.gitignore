@@ -7,6 +7,12 @@ __pycache__/
 db.sqlite3
 db.sqlite3-journal
 
+# PostgreSQL dumps and backups
+*.sql
+*.dump
+backup_*.sql
+backup_*.dump
+
 # Environments / secrets
 .env
 .venv/
@@ -19,6 +25,7 @@ ENV/
 
 # Logs / caches
 *.log
+logs/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

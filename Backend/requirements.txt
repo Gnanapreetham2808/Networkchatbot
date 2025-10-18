@@ -14,3 +14,7 @@ uvicorn
 gunicorn
 python-dotenv
 requests
+
+# PostgreSQL support
+psycopg2-binary==2.9.9
+dj-database-url==2.2.0

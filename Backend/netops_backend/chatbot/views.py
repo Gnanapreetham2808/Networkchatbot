@@ -5,9 +5,12 @@ from django.utils.decorators import method_decorator
 import re
 from django.views.decorators.csrf import csrf_exempt
 import os
+import logging
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 import socket
 import time
+
+logger = logging.getLogger(__name__)
 try:
     import paramiko  # type: ignore
 except Exception:
@@ -15,6 +18,7 @@ except Exception:
 
 from netops_backend.nlp_router import predict_cli, predict_cli_provider
 from .models import Conversation, Message
+from .models import DeviceHealth, HealthAlert
 import subprocess
 from functools import lru_cache
 from datetime import datetime, timedelta, timezone
@@ -291,10 +295,14 @@ class NetworkCommandAPIView(APIView):
                     device_ip = dev_dict.get("host") or dev_dict.get("ip")
                     hostname = dev_dict.get("alias") or default_alias
                     resolution_method = resolution_method or "default"
-                    print(f"[NetworkCommandAPIView] default alias fallback -> {default_alias} {device_ip}")
+                    logger.info("Default alias fallback applied", extra={
+                        'alias': default_alias,
+                        'host': device_ip,
+                        'resolution_method': resolution_method
+                    })
             elif default_ip:
                 device_ip = default_ip
-                print(f"[NetworkCommandAPIView] default IP fallback -> {default_ip}")
+                logger.info("Default IP fallback applied", extra={'host': default_ip})
 
         # 7. Reverse lookup by IP if needed
         if device_ip and not resolved_device_dict:
@@ -312,7 +320,11 @@ class NetworkCommandAPIView(APIView):
             if vij_intent and alias_now.startswith("UK"):
                 alt_dev, _, _ = resolve_device("INVIJB1SW1")
                 if alt_dev:
-                    print("[NetworkCommandAPIView] intent override -> switching target to INVIJB1SW1 due to Vijayawada reference")
+                    logger.info("Intent override applied - switching to Vijayawada", extra={
+                        'from_alias': alias_now,
+                        'to_alias': 'INVIJB1SW1',
+                        'intent': 'vijayawada_reference'
+                    })
                     resolved_device_dict = alt_dev
                     device_ip = alt_dev.get("host") or alt_dev.get("ip") or device_ip
                     hostname = alt_dev.get("alias") or hostname
@@ -332,7 +344,13 @@ class NetworkCommandAPIView(APIView):
                 return Response({"error": "Target device is blocked"}, status=400)
 
 
-        print(f"[NetworkCommandAPIView] query={query!r} session={session_id} target={device_ip} alias_host={hostname}")
+        logger.info("Network command request", extra={
+            'query': query,
+            'session_id': session_id,
+            'alias': hostname,
+            'host': device_ip,
+            'resolution_method': resolution_method
+        })
 
         # Determine connection strategy:
         #  direct (default) | jump_first (try jump then direct fallback) | jump_only (only via jump host)
@@ -348,7 +366,11 @@ class NetworkCommandAPIView(APIView):
             strategy = "jump_only"
         if os.getenv("FORCE_JUMP_FOR_ALL", "0") == "1" and resolved_device_dict and resolved_device_dict.get("jump_via"):
             strategy = "jump_only"
-        print(f"[NetworkCommandAPIView] strategy={strategy}")
+        logger.debug("Connection strategy determined", extra={
+            'strategy': strategy,
+            'alias': alias_upper,
+            'jump_via': resolved_device_dict.get("jump_via") if resolved_device_dict else None
+        })
 
         if not device_ip:
             return Response({"error": "Failed to run command", "session_id": session_id}, status=400)
@@ -361,7 +383,13 @@ class NetworkCommandAPIView(APIView):
             if jd:
                 try:
                     log_label = "jump_only" if strategy == "jump_only" else "jump_first"
-                    print(f"[NetworkCommandAPIView] {log_label} strategy -> trying jump via {jump_alias}{' (no direct fallback)' if strategy=='jump_only' else ' before direct connect'}")
+                    logger.info(f"Attempting jump host connection ({log_label})", extra={
+                        'strategy': strategy,
+                        'jump_alias': jump_alias,
+                        'target_alias': hostname,
+                        'target_host': device_ip,
+                        'no_direct_fallback': strategy == 'jump_only'
+                    })
                     output = self._run_via_jump(
                         jump_device=jd,
                         target_device=resolved_device_dict,
@@ -398,7 +426,12 @@ class NetworkCommandAPIView(APIView):
                         "connection_method": "jump"
                     }, status=200)
                 except Exception as e:
-                    print(f"[NetworkCommandAPIView] jump initial attempt failed -> {e}")
+                    logger.warning("Jump host connection failed", extra={
+                        'strategy': strategy,
+                        'jump_alias': jump_alias,
+                        'target_alias': hostname,
+                        'error': str(e)
+                    }, exc_info=True)
                     jump_first_attempted = True
                     if strategy == "jump_only":
                         # Do not attempt direct connection for jump_only strategy
@@ -1304,3 +1337,72 @@ class DeviceLocationAPIView(APIView):
                     "label": label,
                 })
         return Response({"locations": chosen}, status=200)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class DeviceHealthAPIView(APIView):
+    """Return recent CPU samples and latest alerts per device."""
+
+    def get(self, request):
+        try:
+            limit = int(getattr(request, 'query_params', {}).get('limit', '50'))
+        except Exception:
+            limit = 50
+        include_cleared = str(getattr(request, 'query_params', {}).get('include_cleared', '0')).lower() in ('1','true','yes')
+        # Fetch recent samples
+        samples = list(DeviceHealth.objects.order_by('-created_at', '-id')[:limit].values('alias', 'cpu_pct', 'created_at'))
+        # Latest alert per alias/category
+        latest_alerts = {}
+        base_qs = HealthAlert.objects.order_by('-created_at')
+        if not include_cleared:
+            base_qs = base_qs.filter(cleared_at__isnull=True)
+        for a in base_qs[:200]:
+            key = (a.alias, a.category)
+            if key not in latest_alerts:
+                latest_alerts[key] = {
+                    'alias': a.alias,
+                    'category': a.category,
+                    'severity': a.severity,
+                    'message': a.message,
+                    'created_at': a.created_at,
+                    'cleared_at': a.cleared_at,
+                }
+        alerts = list(latest_alerts.values())
+        return Response({
+            'samples': samples,
+            'alerts': alerts,
+        }, status=200)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class HealthzAPIView(APIView):
+    """Lightweight health summary for dashboards and probes.
+
+    GET /healthz?window_minutes=60 returns:
+      - last_sample_per_device
+      - active_alerts_count by category
+    """
+
+    def get(self, request):
+        try:
+            window_min = int(getattr(request, 'query_params', {}).get('window_minutes', '60'))
+        except Exception:
+            window_min = 60
+        since = datetime.utcnow() - timedelta(minutes=window_min)
+        # last sample per alias
+        last_by_alias = {}
+        for row in DeviceHealth.objects.filter(created_at__gte=since).order_by('alias', '-created_at', '-id').values('alias','cpu_pct','created_at'):
+            a = row['alias']
+            if a not in last_by_alias:
+                last_by_alias[a] = row
+        # active alerts count by category
+        active = HealthAlert.objects.filter(cleared_at__isnull=True)
+        cat_counts = {}
+        for a in active.values('category'):
+            c = a['category']
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+        return Response({
+            'window_minutes': window_min,
+            'last_samples': last_by_alias,
+            'active_alerts_by_category': cat_counts,
+        }, status=200)
