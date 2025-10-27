@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'chatbot',
     'corsheaders',
+    'netops_backend.vlan_agent',
 ]
 
 MIDDLEWARE = [
