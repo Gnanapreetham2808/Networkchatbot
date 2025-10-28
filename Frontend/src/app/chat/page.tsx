@@ -73,6 +73,48 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
+      // Check if message is a VLAN creation request
+      const vlanMatch = trimmed.match(/create vlan|add vlan|new vlan|configure vlan/i);
+      
+      if (vlanMatch) {
+        // Handle VLAN intent via NLP endpoint
+        const vlanUrl = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000').replace('/api/nlp/network-command/', '') + '/api/vlan-intents/nlp/?apply=1';
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
+        
+        const res = await fetch(vlanUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ command: trimmed })
+        });
+
+        let botText = '';
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          botText = `❌ VLAN creation failed: ${err.error || res.statusText}`;
+        } else {
+          const data = await res.json();
+          const { parsed, intent_id, status, applied } = data;
+          
+          if (applied) {
+            botText = `✅ VLAN ${parsed.vlan_id} "${parsed.name}" created and deployed successfully!\n\n📋 Details:\n• Scope: ${parsed.scope}\n• Intent ID: ${intent_id}\n• Status: ${status}`;
+          } else {
+            botText = `⏳ VLAN ${parsed.vlan_id} "${parsed.name}" queued for deployment\n\n📋 Details:\n• Scope: ${parsed.scope}\n• Intent ID: ${intent_id}\n• Status: ${status}\n\nUse "apply pending VLANs" to deploy.`;
+          }
+        }
+
+        const botMessage: ChatMessage = {
+          id: Date.now().toString(),
+          sender: 'bot',
+          content: botText,
+          timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, botMessage]);
+        setIsLoading(false);
+        return;
+      }
+
+      // Default chat flow for non-VLAN commands
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
       const res = await fetch(BACKEND_URL, {
@@ -137,7 +179,8 @@ export default function ChatPage() {
             <div className="text-center text-gray-400 dark:text-gray-500 py-16">
               <p className="mb-2">Start chatting below 👇</p>
               <p className="text-sm">
-                Example: <span className="text-blue-500">"Show VLANs"</span>
+                Example: <span className="text-blue-500">"Show VLANs"</span> or{' '}
+                <span className="text-emerald-500">"Create VLAN 200 named Guest on access"</span>
               </p>
             </div>
           )}

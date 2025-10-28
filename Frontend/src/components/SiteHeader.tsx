@@ -10,6 +10,7 @@ interface NavItem { href: string; label: string; admin?: boolean; }
 const NAV_ITEMS: NavItem[] = [
   { href: '/', label: 'Home' },
   { href: '/chat', label: 'Chat' },
+  { href: '/vlan-manager', label: 'VLAN Manager' },
   { href: '/admin/logs', label: 'Logs', admin: true },
   { href: '/admin/dashboard', label: 'Dashboard', admin: true },
   { href: '/admin/devices', label: 'Devices', admin: true },

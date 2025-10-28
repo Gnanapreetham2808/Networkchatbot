@@ -99,9 +99,18 @@ def _configure_vlan(connection: ConnectHandler, vlan_id: int, name: str, device_
 
 
 def deploy_vlan_to_switches(vlan_plan: Dict[str, Any]) -> Dict[str, str]:
-    """Create a VLAN across core/access switches, skipping existing ones.
+    """Create a VLAN following hierarchical flow: Core → Access switches.
 
-    vlan_plan expects: {"vlan_id": int, "name": str, "scope": str?, "targets": [aliases]?}
+    Hierarchy:
+    - Core switch: INVIJB1SW1 (Cisco) - primary
+    - Access switches: INHYDB3SW3 (Aruba), UKLONB1SW2 (Cisco)
+    
+    Flow:
+    1. Create on core switch first
+    2. If successful, propagate to all access switches
+    3. Skip if VLAN already exists on any device
+    
+    vlan_plan expects: {"vlan_id": int, "name": str, "scope": str?}
     Returns {alias: "created"|"skipped"|"failed"}
     """
     logger = get_logger()
@@ -110,35 +119,74 @@ def deploy_vlan_to_switches(vlan_plan: Dict[str, Any]) -> Dict[str, str]:
     validate_vlan_id(vlan_id)
 
     inventory = get_devices()  # alias -> device dict
-    targets: List[str] = vlan_plan.get("targets") or list(inventory.keys())
     summary: Dict[str, str] = {}
-
-    for alias in targets:
-        dev = inventory.get(alias.upper())
-        if not dev:
-            log_event(logging.WARNING, "Device not found in inventory", device=alias)
-            summary[alias] = "failed"
+    
+    # Define hierarchy: core switch first, then access switches
+    CORE_SWITCH = "INVIJB1SW1"
+    ACCESS_SWITCHES = ["INHYDB3SW3", "UKLONB1SW2"]
+    
+    # Step 1: Deploy to Core Switch
+    log_event(logging.INFO, f"Starting hierarchical VLAN deployment: Core → Access", vlan_id=vlan_id)
+    
+    core_dev = inventory.get(CORE_SWITCH)
+    if not core_dev:
+        log_event(logging.ERROR, "Core switch not found in inventory", device=CORE_SWITCH)
+        summary[CORE_SWITCH] = "failed"
+        return summary
+    
+    # Deploy to core
+    core_result = _deploy_to_single_device(CORE_SWITCH, core_dev, vlan_id, name, is_core=True)
+    summary[CORE_SWITCH] = core_result
+    
+    # If core deployment failed completely, stop propagation
+    if core_result == "failed":
+        log_event(logging.ERROR, f"Core switch deployment failed - aborting access switch propagation", vlan_id=vlan_id)
+        for access_alias in ACCESS_SWITCHES:
+            summary[access_alias] = "skipped (core failed)"
+        return summary
+    
+    # Step 2: Propagate to Access Switches
+    log_event(logging.INFO, f"Core switch {core_result} - propagating to access switches", vlan_id=vlan_id, device=CORE_SWITCH)
+    
+    for access_alias in ACCESS_SWITCHES:
+        access_dev = inventory.get(access_alias)
+        if not access_dev:
+            log_event(logging.WARNING, "Access switch not found in inventory", device=access_alias)
+            summary[access_alias] = "failed"
             continue
-        params = _netmiko_params_from_device(alias, dev)
-        try:
-            log_event(logging.INFO, f"Connecting to device", device=alias, host=params.get("host"))
-            with ConnectHandler(**params) as conn:
-                device_type = params.get("device_type", "")
-                if _vlan_exists(conn, vlan_id, device_type):
-                    log_event(logging.INFO, f"VLAN {vlan_id} exists -> skipped", device=alias)
-                    summary[alias] = "skipped"
-                    continue
-                _configure_vlan(conn, vlan_id, name, device_type)
-                log_event(logging.INFO, f"VLAN {vlan_id} created", device=alias)
-                summary[alias] = "created"
-        except (NetMikoTimeoutException, NetMikoAuthenticationException) as e:
-            log_event(logging.ERROR, f"Connection error: {e}", device=alias)
-            summary[alias] = "failed"
-        except Exception as e:  # pragma: no cover
-            log_event(logging.ERROR, f"Unhandled error: {e}", device=alias)
-            summary[alias] = "failed"
-
+        
+        access_result = _deploy_to_single_device(access_alias, access_dev, vlan_id, name, is_core=False)
+        summary[access_alias] = access_result
+    
     return summary
+
+
+def _deploy_to_single_device(alias: str, dev: dict, vlan_id: int, name: str, is_core: bool) -> str:
+    """Deploy VLAN to a single device. Returns 'created'|'skipped'|'failed'."""
+    device_role = "Core" if is_core else "Access"
+    params = _netmiko_params_from_device(alias, dev)
+    
+    try:
+        log_event(logging.INFO, f"Connecting to {device_role} switch", device=alias, host=params.get("host"))
+        with ConnectHandler(**params) as conn:
+            device_type = params.get("device_type", "")
+            
+            # Check if VLAN exists
+            if _vlan_exists(conn, vlan_id, device_type):
+                log_event(logging.INFO, f"VLAN {vlan_id} already exists on {device_role} switch", device=alias)
+                return "skipped"
+            
+            # Create VLAN
+            _configure_vlan(conn, vlan_id, name, device_type)
+            log_event(logging.INFO, f"VLAN {vlan_id} created on {device_role} switch", device=alias)
+            return "created"
+            
+    except (NetMikoTimeoutException, NetMikoAuthenticationException) as e:
+        log_event(logging.ERROR, f"Connection error on {device_role} switch: {e}", device=alias)
+        return "failed"
+    except Exception as e:
+        log_event(logging.ERROR, f"Unhandled error on {device_role} switch: {e}", device=alias)
+        return "failed"
 
 
 def validate_vlan_propagation(vlan_id: int) -> Dict[str, str]:
