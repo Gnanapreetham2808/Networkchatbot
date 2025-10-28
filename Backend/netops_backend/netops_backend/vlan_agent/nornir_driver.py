@@ -102,8 +102,8 @@ def deploy_vlan_to_switches(vlan_plan: Dict[str, Any]) -> Dict[str, str]:
     """Create a VLAN following hierarchical flow: Core → Access switches.
 
     Hierarchy:
-    - Core switch: INVIJB1SW1 (Cisco) - primary
-    - Access switches: INHYDB3SW3 (Aruba), UKLONB1SW2 (Cisco)
+    - Core switch: UKLONB10C01 (London - Cisco) - primary
+    - Access switches: INVIJB1C01 (Vijayawada - Cisco), INVIJB10A01 (Vijayawada - Aruba)
     
     Flow:
     1. Create on core switch first
@@ -122,8 +122,8 @@ def deploy_vlan_to_switches(vlan_plan: Dict[str, Any]) -> Dict[str, str]:
     summary: Dict[str, str] = {}
     
     # Define hierarchy: core switch first, then access switches
-    CORE_SWITCH = "INVIJB1SW1"
-    ACCESS_SWITCHES = ["INHYDB3SW3", "UKLONB1SW2"]
+    CORE_SWITCH = "UKLONB10C01"
+    ACCESS_SWITCHES = ["INVIJB1C01", "INVIJB10A01"]
     
     # Step 1: Deploy to Core Switch
     log_event(logging.INFO, f"Starting hierarchical VLAN deployment: Core → Access", vlan_id=vlan_id)

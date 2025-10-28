@@ -62,11 +62,13 @@ def log_event(level: int, msg: str, *, device: Optional[str] = None, **extra: An
     logger = get_logger()
     if device:
         extra = {**extra, "device": device}
+    # Replace Unicode characters with ASCII equivalents for Windows console compatibility
+    msg_ascii = msg.replace('→', '->').replace('←', '<-').replace('✓', 'OK').replace('✗', 'X').replace('•', '*')
     try:
-        logger.log(level, msg, extra=extra)
+        logger.log(level, msg_ascii, extra=extra)
     except Exception:
         # Avoid logging failures impacting control flow
-        logger.log(level, msg)
+        logger.log(level, msg_ascii)
 
 
 def generate_vlan_intent_from_text(command: str) -> Dict[str, Any]:

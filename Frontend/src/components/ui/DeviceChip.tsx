@@ -1,6 +1,7 @@
 "use client";
 import { motion } from "framer-motion";
 import React from "react";
+import { FiServer } from "react-icons/fi";
 
 interface DeviceChipProps {
   alias?: string;
@@ -15,17 +16,24 @@ const shimmerAnim = {
 };
 
 export const DeviceChip: React.FC<DeviceChipProps> = ({ alias, host, loading }) => {
-  const content = loading ? "Resolving device..." : alias ? `${alias}${host ? ` (${host})` : ''}` : 'No device';
+  const content = loading 
+    ? "Resolving device..." 
+    : alias 
+      ? `${alias}${host ? ` (${host})` : ''}` 
+      : 'No device';
+  
   const motionProps: any = loading ? shimmerAnim : {};
+  
   return (
     <motion.div
       initial={motionProps.initial}
       animate={motionProps.animate}
       transition={motionProps.transition}
-      className="text-xs px-2 py-1 rounded-full font-medium border border-white/30 text-white/90 backdrop-blur-sm bg-gradient-to-r from-white/15 via-white/5 to-white/15 bg-[length:200%_100%]"
-      title={host}
+      className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-full font-medium border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 bg-gradient-to-r from-blue-100 via-blue-50 to-blue-100 dark:from-blue-900/40 dark:via-blue-900/20 dark:to-blue-900/40 bg-[length:200%_100%] shadow-sm"
+      title={host ? `Device: ${alias}\nIP/Hostname: ${host}` : alias}
     >
-      {content}
+      <FiServer className="w-3.5 h-3.5" />
+      <span>{content}</span>
     </motion.div>
   );
 };

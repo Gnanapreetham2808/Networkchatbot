@@ -223,6 +223,7 @@ LOGGING = {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'json' if LOG_FORMAT == 'json' else 'verbose',
+            'stream': 'ext://sys.stdout',  # Explicitly use stdout
         },
         'file': {
             'class': 'logging.handlers.RotatingFileHandler',
@@ -230,6 +231,7 @@ LOGGING = {
             'maxBytes': 10485760,  # 10MB
             'backupCount': 5,
             'formatter': 'json' if LOG_FORMAT == 'json' else 'verbose',
+            'encoding': 'utf-8',  # UTF-8 encoding for file handler
         },
     },
     'loggers': {

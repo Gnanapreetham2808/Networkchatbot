@@ -1,15 +1,16 @@
 """Provider-agnostic CLI prediction router.
 
 Selects between the local finetuned T5 (nlp_model.predict_cli) and external LLMs
-(OpenAI or a generic HTTP endpoint) based on environment variables.
+(OpenAI, Google Gemini, or a generic HTTP endpoint) based on environment variables.
 
 Environment:
-    CLI_LLM_PROVIDER   = local | openai | http
-    CLI_LLM_MODEL      = provider-specific model name (e.g., gpt-4o-mini)
+    CLI_LLM_PROVIDER   = local | openai | gemini | http
+    CLI_LLM_MODEL      = provider-specific model name (e.g., gpt-4o-mini, gemini-pro)
     CLI_LLM_BASE_URL   = base URL for generic HTTP provider
   CLI_LLM_TIMEOUT    = request timeout in seconds (default 15)
   CLI_LLM_SYSTEM_PROMPT = optional custom system prompt
   OPENAI_API_KEY     = required if provider=openai
+  GEMINI_API_KEY     = required if provider=gemini
 
 Behavior:
   - Returns a single line CLI command as string, or an error string prefixed with [Error]
@@ -134,6 +135,68 @@ def _predict_via_openai(query: str, model: Optional[str] = None, system: Optiona
         return f"[Error] OpenAI parse failure: {e} | raw={text[:1000]}"
 
 
+def _predict_via_gemini(query: str, model: Optional[str] = None, system: Optional[str] = None) -> str:
+    """Predict CLI via Google Gemini API."""
+    import time
+    start_time = time.time()
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        logger.error("Gemini API key missing")
+        return "[Error] GEMINI_API_KEY not set"
+    
+    model = model or os.getenv("CLI_LLM_MODEL", "gemini-1.5-flash")
+    # Gemini REST API endpoint
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    timeout = float(os.getenv("CLI_LLM_TIMEOUT", "15"))
+    
+    # Combine system prompt and user query for Gemini
+    system_content = system or _system_prompt()
+    full_prompt = f"{system_content}\n\nRequest: {query}\nReturn only one CLI command."
+    
+    payload = {
+        "contents": [{
+            "parts": [{"text": full_prompt}]
+        }],
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 100,
+        }
+    }
+    
+    headers = {"Content-Type": "application/json"}
+    status_code, text = _http_post(url, headers, payload, timeout)
+    duration_ms = (time.time() - start_time) * 1000
+    
+    if status_code >= 400:
+        print(f"[GEMINI ERROR] Status: {status_code}, Response: {text[:1000]}")
+        logger.error("Gemini API request failed", extra={
+            'status_code': status_code,
+            'query': query[:100],
+            'duration_ms': duration_ms,
+            'error': text[:500]
+        })
+        return f"[Error] Gemini HTTP {status_code}: {text[:2000]}"
+    
+    try:
+        data = json.loads(text)
+        # Gemini response structure: candidates[0].content.parts[0].text
+        content = data["candidates"][0]["content"]["parts"][0]["text"]
+        result = _sanitize_cli(content)
+        logger.info("Gemini prediction completed", extra={
+            'query': query[:100],
+            'predicted_cli': result,
+            'model': model,
+            'duration_ms': duration_ms
+        })
+        return result
+    except Exception as e:
+        logger.error("Gemini response parse failed", extra={
+            'query': query[:100],
+            'error': str(e),
+            'response_preview': text[:500]
+        }, exc_info=True)
+        return f"[Error] Gemini parse failure: {e} | raw={text[:1000]}"
+
 
 
 def _predict_via_generic_http(query: str, model: Optional[str] = None, system: Optional[str] = None) -> str:
@@ -174,6 +237,8 @@ def predict_cli(query: str) -> str:
         return "[Error] Empty query"
     if provider == "openai":
         return _predict_via_openai(query)
+    if provider == "gemini":
+        return _predict_via_gemini(query)
     if provider == "http":
         return _predict_via_generic_http(query)
     return f"[Error] Unknown CLI_LLM_PROVIDER={provider}"
@@ -182,8 +247,8 @@ def predict_cli(query: str) -> str:
 def predict_cli_provider(query: str, provider: Optional[str] = None, model: Optional[str] = None, system_prompt: Optional[str] = None) -> str:
     """Predict a CLI command with an explicit provider/model override.
 
-    provider: local | openai | http
-    model: optional provider-specific model name (e.g., gpt-4o-mini)
+    provider: local | openai | gemini | http
+    model: optional provider-specific model name (e.g., gpt-4o-mini, gemini-pro)
     system_prompt: optional custom system prompt
     """
     prov = (provider or os.getenv("CLI_LLM_PROVIDER", "local") or "local").lower()
@@ -193,6 +258,8 @@ def predict_cli_provider(query: str, provider: Optional[str] = None, model: Opti
         return "[Error] Empty query"
     if prov == "openai":
         return _predict_via_openai(query, model=model, system=system_prompt)
+    if prov == "gemini":
+        return _predict_via_gemini(query, model=model, system=system_prompt)
     if prov == "http":
         return _predict_via_generic_http(query, model=model, system=system_prompt)
     return f"[Error] Unknown CLI_LLM_PROVIDER={prov}"

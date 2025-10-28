@@ -3,7 +3,7 @@ from Devices.device_resolver import resolve_device
 
 
 class VijayawadaResolutionTests(TestCase):
-	def _assert_alias(self, query: str, expected: str = "INVIJB1SW1"):
+	def _assert_alias(self, query: str, expected: str = "INVIJB1C01"):
 		dev, candidates, err = resolve_device(query)
 		self.assertIsNotNone(dev, f"Device should resolve for query '{query}' (err={err}, candidates={candidates})")
 		self.assertEqual(dev.get("alias"), expected, f"Expected alias {expected} for query '{query}' but got {dev.get('alias')}")

@@ -249,8 +249,8 @@ class NetworkCommandAPIView(APIView):
                 candidates, err = candidates2, err2
 
         # 3. Explicit Vijayawada fallback if intent present but still unresolved
-        if not dev_dict and ("vijayawada" in (query or "").lower() or (hostname and str(hostname).upper() == "INVIJB1SW1")):
-            dev_fallback, _, _ = resolve_device("INVIJB1SW1")
+        if not dev_dict and ("vijayawada" in (query or "").lower() or (hostname and str(hostname).upper() == "INVIJB1C01")):
+            dev_fallback, _, _ = resolve_device("INVIJB1C01")
             if dev_fallback:
                 dev_dict = dev_fallback
                 resolution_method = resolution_method or "explicit_fallback"
@@ -286,7 +286,7 @@ class NetworkCommandAPIView(APIView):
 
         # 6. Default alias fallback
         if not device_ip:
-            default_alias = os.getenv("DEFAULT_DEVICE_ALIAS") or "UKLONB1SW2"
+            default_alias = os.getenv("DEFAULT_DEVICE_ALIAS") or "UKLONB10C01"
             default_ip = os.getenv("DEFAULT_DEVICE_IP")
             if default_alias:
                 dev_dict, _, _ = resolve_device(default_alias)
@@ -318,11 +318,11 @@ class NetworkCommandAPIView(APIView):
             vij_intent = any(k in ql for k in ["vijayawada", "vij ", " vij", "vijay ", " vijay", "vijaya ", " vijaya", "india"])
             alias_now = (resolved_device_dict.get("alias") or "").upper()
             if vij_intent and alias_now.startswith("UK"):
-                alt_dev, _, _ = resolve_device("INVIJB1SW1")
+                alt_dev, _, _ = resolve_device("INVIJB1C01")
                 if alt_dev:
                     logger.info("Intent override applied - switching to Vijayawada", extra={
                         'from_alias': alias_now,
-                        'to_alias': 'INVIJB1SW1',
+                        'to_alias': 'INVIJB1C01',
                         'intent': 'vijayawada_reference'
                     })
                     resolved_device_dict = alt_dev
@@ -418,7 +418,7 @@ class NetworkCommandAPIView(APIView):
                     return Response({
                         "output": output,
                         "device_alias": hostname,
-                        "device_host": resolved_device_dict.get("loopback") or resolved_device_dict.get("host") or device_ip,
+                        "device_host": resolved_device_dict.get("host") or device_ip,  # Use primary host only (loopback disabled)
                         "session_id": session_id,
                         "jump_via": jump_alias,
                         "cleaned": True,
@@ -437,17 +437,17 @@ class NetworkCommandAPIView(APIView):
                         # Do not attempt direct connection for jump_only strategy
                         return Response({"error": "Unable to connect to device via jump host"}, status=502)
 
-        # Vendor-aware CLI prediction: Cisco -> local T5/LoRA, Aruba -> OpenAI (gpt-4o-mini/gpt-5o-mini)
+        # Vendor-aware CLI prediction: Cisco -> local T5/LoRA, Aruba -> Gemini API
         vendor = (resolved_device_dict or {}).get("vendor") or (resolved_device_dict or {}).get("device_type") or ""
         vendor_l = str(vendor).lower()
         # Environment overrides (optional)
-        # Aruba always uses OpenAI per requirement (ignore env override)
-        aruba_provider = "openai"
-        aruba_model = os.getenv("ARUBA_LLM_MODEL", os.getenv("CLI_LLM_MODEL", "gpt-4o-mini"))
+        # Aruba uses Gemini API (free tier: 1500 requests/day)
+        aruba_provider = os.getenv("ARUBA_LLM_PROVIDER", "gemini")
+        aruba_model = os.getenv("ARUBA_LLM_MODEL", "gemini-1.5-flash")
         cisco_provider = os.getenv("CISCO_LLM_PROVIDER", "local")
 
         if "aruba" in vendor_l or "hp" in vendor_l or "hewlett" in vendor_l:
-            # Strip location words for OpenAI so it focuses on the intent, not site names
+            # Strip location words for Gemini so it focuses on the intent, not site names
             loc_pattern = re.compile(r"\b(uk|london|gb|india|in|vijayawada|hyderabad|hyderabaad|hyd|lab|aruba)\b", re.I)
             sanitized_query = loc_pattern.sub("", query).strip()
             # Default Aruba prompt if not provided in env
@@ -461,20 +461,17 @@ class NetworkCommandAPIView(APIView):
                 model=aruba_model,
                 system_prompt=aruba_system,
             )
-            # Fallback: if OpenAI Aruba model fails, try OpenAI with Cisco system prompt
+            # No fallback for Aruba - Gemini API is required for AOS-CX commands
             if (not cli_command) or cli_command.startswith("[Error]"):
-                cisco_fallback_provider = os.getenv("ARUBA_FALLBACK_PROVIDER", "openai")
-                cisco_fallback_model = os.getenv("ARUBA_FALLBACK_MODEL", os.getenv("CLI_LLM_MODEL", "gpt-4o-mini"))
-                cisco_system = os.getenv(
-                    "CISCO_SYSTEM_PROMPT",
-                    "You are a precise network CLI assistant. Given a natural language request, output exactly one Cisco IOS show command that best answers it. Return ONLY the command text, with no quotes or explanations."
-                )
-                cli_command = predict_cli_provider(
-                    sanitized_query or query,
-                    provider=cisco_fallback_provider,
-                    model=cisco_fallback_model,
-                    system_prompt=cisco_system,
-                )
+                error_msg = "Gemini API required for Aruba devices. Please check your API key."
+                if cli_command and "GEMINI_API_KEY" in cli_command:
+                    error_msg = "Gemini API key not set. Get free key at https://makersuite.google.com/app/apikey"
+                logger.error(error_msg, extra={'vendor': vendor, 'error': cli_command})
+                return Response({
+                    "error": error_msg,
+                    "details": "Aruba AOS-CX requires Gemini API. T5 model only supports Cisco IOS.",
+                    "session_id": session_id
+                }, status=503)
         else:
             # default Cisco/local
             cli_command = predict_cli_provider(
@@ -596,30 +593,33 @@ class NetworkCommandAPIView(APIView):
             "port": 23,
         }
 
-        # Build ordered candidate list (loopbacks first) once here so both initial and retry logic share it.
+        # Build ordered candidate list - LOOPBACKS DISABLED (only use primary host)
         ordered_candidates: list[str] = []
         if resolved_device_dict:
-            loopbacks_any = []
-            try:
-                if isinstance(resolved_device_dict.get('loopbacks'), list):
-                    loopbacks_any = [lb for lb in resolved_device_dict.get('loopbacks') if lb]
-                elif resolved_device_dict.get('loopback'):
-                    # legacy single loopback value
-                    lv = resolved_device_dict.get('loopback')
-                    if isinstance(lv, str):
-                        loopbacks_any = [lv]
-            except Exception:
-                pass
+            # COMMENTED OUT: Loopback fallback disabled - connect directly to host IP only
+            # loopbacks_any = []
+            # try:
+            #     if isinstance(resolved_device_dict.get('loopbacks'), list):
+            #         loopbacks_any = [lb for lb in resolved_device_dict.get('loopbacks') if lb]
+            #     elif resolved_device_dict.get('loopback'):
+            #         # legacy single loopback value
+            #         lv = resolved_device_dict.get('loopback')
+            #         if isinstance(lv, str):
+            #             loopbacks_any = [lv]
+            # except Exception:
+            #     pass
+            
             primary_host_initial = device_ip
             alt_hosts_any = []
             try:
                 alt_hosts_any = [h for h in (resolved_device_dict.get('alt_hosts') or []) if h]
             except Exception:
                 alt_hosts_any = []
-            # Compose order: loopbacks -> primary host -> alt hosts (deduplicated)
-            for h in loopbacks_any:
-                if h and h not in ordered_candidates:
-                    ordered_candidates.append(h)
+            
+            # Compose order: PRIMARY HOST ONLY (loopbacks disabled, alt_hosts as backup)
+            # REMOVED: for h in loopbacks_any:
+            #     if h and h not in ordered_candidates:
+            #         ordered_candidates.append(h)
             if primary_host_initial and primary_host_initial not in ordered_candidates:
                 ordered_candidates.append(primary_host_initial)
             for h in alt_hosts_any:
@@ -629,7 +629,7 @@ class NetworkCommandAPIView(APIView):
                 device_ip = ordered_candidates[0]
                 ssh_device['host'] = device_ip
                 telnet_device['host'] = device_ip
-                print(f"[NetworkCommandAPIView] connection candidates (loopbacks-first)={ordered_candidates}")
+                print(f"[NetworkCommandAPIView] connection candidates (primary-host-only)={ordered_candidates}")
 
         net_connect = None
         last_err = None
@@ -753,7 +753,7 @@ class NetworkCommandAPIView(APIView):
                         resp_payload = {
                             "output": output,
                             "device_alias": hostname,
-                            "device_host": (resolved_device_dict.get("loopback") if resolved_device_dict else None) or device_ip,
+                            "device_host": (resolved_device_dict.get("host") if resolved_device_dict else None) or device_ip,  # Use primary host only
                             "session_id": session_id,
                             "jump_via": jump_alias,
                             "cleaned": True,
@@ -934,9 +934,9 @@ class NetworkCommandAPIView(APIView):
         jump_host = jump_device.get("host")
         if not jump_host:
             raise RuntimeError("jump device missing host")
-        target_host = target_device.get("loopback") or target_device.get("host") or primary_ip
+        target_host = target_device.get("host") or primary_ip  # Use primary host only (loopback disabled)
         if not target_host:
-            raise RuntimeError("target device missing host/loopback")
+            raise RuntimeError("target device missing host")
         target_alias = (target_device.get("alias") or target_device.get("ALIAS") or target_device.get("name") or "").strip() or None
         jd = {
             "device_type": jump_device.get("device_type", "cisco_ios"),
@@ -983,10 +983,11 @@ class NetworkCommandAPIView(APIView):
             except Exception:
                 pass
             # ------------------- Enhanced multi-host attempt + identity verification -------------------
-            # Build ordered candidate hosts: loopback (if distinct) -> primary host -> alt_hosts
+            # Build ordered candidate hosts: PRIMARY HOST ONLY (loopback disabled) -> alt_hosts
             candidate_hosts: list[str] = []
-            if target_device.get("loopback") and target_device.get("loopback") != target_device.get("host"):
-                candidate_hosts.append(target_device.get("loopback"))  # type: ignore[arg-type]
+            # COMMENTED OUT: Loopback disabled
+            # if target_device.get("loopback") and target_device.get("loopback") != target_device.get("host"):
+            #     candidate_hosts.append(target_device.get("loopback"))  # type: ignore[arg-type]
             if target_device.get("host"):
                 candidate_hosts.append(target_device.get("host"))  # type: ignore[arg-type]
             try:
@@ -1272,23 +1273,21 @@ class DeviceLocationAPIView(APIView):
     """
 
     FALLBACK_COORDS = {
-        "UKLONB1SW2": {"lat": 51.5072, "lng": -0.1276, "label": "UK - London"},
-        "INVIJB1SW1": {"lat": 16.5062, "lng": 80.6480, "label": "India - Vijayawada"},
-        "INHYDB3SW3": {"lat": 17.3850, "lng": 78.4867, "label": "India - Hyderabad (B3 SW3)"},
+        "UKLONB10C01": {"lat": 51.5072, "lng": -0.1276, "label": "UK - London"},
+        "INVIJB1C01": {"lat": 16.5062, "lng": 80.6480, "label": "India - Vijayawada (Cisco)"},
+        "INVIJB10A01": {"lat": 16.5062, "lng": 80.6480, "label": "India - Vijayawada (Aruba)"},
     }
 
     SITE_ALIAS_PREF = {
-        "uk": ["UKLONB1SW2"],
-        "london": ["UKLONB1SW2"],
-        # India should include both Vijayawada and Hyderabad
-        "in": ["INVIJB1SW1", "INHYDB3SW3"],
-        "india": ["INVIJB1SW1", "INHYDB3SW3"],
-        "vijayawada": ["INVIJB1SW1"],
-        "hyd": ["INHYDB3SW3"],
-        "hyderabad": ["INHYDB3SW3"],
-        "hyderabaad": ["INHYDB3SW3"],
-        "lab": ["INHYDB3SW3"],
-        "aruba": ["INHYDB3SW3"],
+        "uk": ["UKLONB10C01"],
+        "london": ["UKLONB10C01"],
+        # India - both devices in Vijayawada
+        "in": ["INVIJB1C01", "INVIJB10A01"],
+        "india": ["INVIJB1C01", "INVIJB10A01"],
+        "vijayawada": ["INVIJB1C01", "INVIJB10A01"],
+        "vij": ["INVIJB1C01", "INVIJB10A01"],
+        "lab": ["INVIJB10A01"],
+        "aruba": ["INVIJB10A01"],
     }
 
     def get(self, request):

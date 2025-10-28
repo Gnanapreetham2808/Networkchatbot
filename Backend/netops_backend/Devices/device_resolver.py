@@ -5,7 +5,7 @@ resolve_device(query: str) -> (device_dict|None, candidates:list[str], error:str
 
 Heuristics:
  - Direct alias mention (exact key, case-insensitive)
- - Phrase patterns mapping "vijayawada building 1 switch 1" -> INVIJB1SW1
+ - Phrase patterns mapping "vijayawada building 1" -> INVIJB1C01, "aruba" -> INVIJB10A01
  - If ambiguous (multiple matches) returns candidates.
 """
 from __future__ import annotations
@@ -73,26 +73,24 @@ def find_device_by_host(host: str) -> Tuple[Optional[str], Optional[dict]]:
 
 _PHRASE_MAP = {
     # canonical phrase -> alias
-    re.compile(r"vijayawada\s+building\s*1\s+switch\s*1", re.I): "INVIJB1SW1",
+    re.compile(r"vijayawada\s+building\s*1\s+switch\s*1", re.I): "INVIJB1C01",
     # Generic building 1 with no explicit city defaults to Vijayawada primary
-    re.compile(r"\bbuilding\s*1\b", re.I): "INVIJB1SW1",
-    # Hyderabad Building 3 Switch 3
-    re.compile(r"hyderabad\s+building\s*3\s+switch\s*3", re.I): "INHYDB3SW3",
+    re.compile(r"\bbuilding\s*1\b", re.I): "INVIJB1C01",
+    # Vijayawada Building 10 Access (Aruba)
+    re.compile(r"vijayawada\s+building\s*10\s+access", re.I): "INVIJB10A01",
 }
 
 # Simple location keyword to alias preference (fallback when no explicit alias)
 _LOCATION_KEYWORDS = [
+    # Aruba/HPE references map to Vijayawada Aruba switch (Building 10)
+    (re.compile(r"\b(aruba|hp|hewlett)\b", re.I), "INVIJB10A01"),
     # Expanded Vijayawada synonyms (short forms or partials) map to primary alias
-    (re.compile(r"\b(vij|vijay|vijaya|vijayawada|india)\b", re.I), "INVIJB1SW1"),
-    (re.compile(r"\b(london|uk)\b", re.I), "UKLONB1SW2"),
-    # Aruba/HPE references map to Hyderabad Aruba switch
-    (re.compile(r"\b(aruba|hp|hewlett)\b", re.I), "INHYDB3SW3"),
-    # Hyderabad shortcuts
-    (re.compile(r"\b(hyd|hyderabad)\b", re.I), "INHYDB3SW3"),
+    (re.compile(r"\b(vij|vijay|vijaya|vijayawada|india)\b", re.I), "INVIJB1C01"),
+    (re.compile(r"\b(london|uk)\b", re.I), "UKLONB10C01"),
 ]
 
 # Known location keys for fuzzy matching
-_FUZZY_KEYS = ["london", "uk", "vijayawada", "vij", "vijay", "vijaya", "building 1", "aruba", "hp", "hyd", "hyderabad", "building 3"]
+_FUZZY_KEYS = ["london", "uk", "vijayawada", "vij", "vijay", "vijaya", "building 1", "building 10", "aruba", "hp"]
 
 
 def _attach_alias(alias: str, dev: dict | None) -> Optional[dict]:
@@ -104,8 +102,8 @@ def _attach_alias(alias: str, dev: dict | None) -> Optional[dict]:
 
 
 def _best_uk_alias(devices: Dict[str, dict]) -> Optional[str]:
-    # prefer UKLONB2SW2, then UKLONB1SW2, then any UKLONB*, then any UK*
-    for pref in ["UKLONB1SW2"]:
+    # prefer UKLONB10C01, then any UKLONB*, then any UK*
+    for pref in ["UKLONB10C01"]:
         if pref in devices:
             return pref
     for k in devices.keys():
@@ -118,23 +116,23 @@ def _best_uk_alias(devices: Dict[str, dict]) -> Optional[str]:
 
 
 def _best_in_alias(devices: Dict[str, dict]) -> Optional[str]:
-    # prefer INVIJB1SW1, then any INVIJB1SW*
-    if "INVIJB1SW1" in devices:
-        return "INVIJB1SW1"
+    # prefer INVIJB1C01, then any INVIJB1*
+    if "INVIJB1C01" in devices:
+        return "INVIJB1C01"
     for k in devices.keys():
-        if k.startswith("INVIJB1SW"):
+        if k.startswith("INVIJB1"):
             return k
     return None
 
 
 def _best_aruba_alias(devices: Dict[str, dict]) -> Optional[str]:
-    # Prefer explicitly vendor=aruba; now expect INHYDB3SW3 as primary Aruba
+    # Prefer explicitly vendor=aruba; expect INVIJB10A01 as primary Aruba
     for alias, dev in devices.items():
         if str(dev.get("vendor", "")).lower().startswith("aruba"):
             return alias
-    # Fallback: any alias starting with INHYD or ARU
+    # Fallback: any alias starting with INVIJB10A or ARU
     for k in devices.keys():
-        if k.startswith("INHYD") or k.startswith("ARU"):
+        if k.startswith("INVIJB10A") or k.startswith("ARU"):
             return k
     return None
 
@@ -222,13 +220,11 @@ def resolve_device(query: str) -> Tuple[Optional[dict], List[str], Optional[str]
     mapped_aliases: List[str] = []
     for key in fuzzy_hits:
         if key in ("london", "uk"):
-            mapped_aliases.append("UKLONB1SW2")
+            mapped_aliases.append("UKLONB10C01")
         elif key in ("vijayawada", "vij", "vijay", "vijaya", "building 1"):
-            mapped_aliases.append("INVIJB1SW1")
-        elif key in ("aruba", "hp"):
-            mapped_aliases.append("INHYDB3SW3")
-        elif key in ("hyd", "hyderabad", "building 3"):
-            mapped_aliases.append("INHYDB3SW3")
+            mapped_aliases.append("INVIJB1C01")
+        elif key in ("aruba", "hp", "building 10"):
+            mapped_aliases.append("INVIJB10A01")
 
     # Reduce to single site if both UK and IN appear -> ambiguous
     mapped_aliases = list(dict.fromkeys(mapped_aliases))  # dedupe preserve order
@@ -279,9 +275,10 @@ def resolve_device(query: str) -> Tuple[Optional[dict], List[str], Optional[str]
 
 if __name__ == "__main__":
     for q in [
-        "show interfaces on INVIJB1SW1",
-        "Vijayawada building 1 switch 1 interfaces",
-        "Vijayawada switch",
+        "show interfaces on INVIJB1C01",
+        "Vijayawada building 1 interfaces",
+        "show interfaces on aruba switch",
+        "London switch status",
     ]:
         dev, cand, err = resolve_device(q)
         print(q, "->", dev, cand, err)
