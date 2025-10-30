@@ -185,14 +185,10 @@ def _predict_via_gemini(query: str, model: Optional[str] = None, system: Optiona
         data = json.loads(text)
         # Gemini response structure: candidates[0].content.parts[0].text
         content = data["candidates"][0]["content"]["parts"][0]["text"]
-        # Don't sanitize (truncate to first line) if custom system prompt provided (e.g., VLAN creation needs multiple lines)
-        if system:
-            result = content.strip()
-        else:
-            result = _sanitize_cli(content)
+        result = _sanitize_cli(content)
         logger.info("Gemini prediction completed", extra={
             'query': query[:100],
-            'predicted_cli': result[:200],  # Log preview
+            'predicted_cli': result,
             'model': model,
             'duration_ms': duration_ms
         })

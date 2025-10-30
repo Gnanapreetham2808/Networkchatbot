@@ -20,16 +20,14 @@ logger = logging.getLogger(__name__)
 
 CISCO_IOS_VLAN_SYSTEM_PROMPT = """You are a Cisco IOS CLI command generator for VLAN configuration.
 
-CRITICAL: Generate ALL commands in sequence. Do not stop after the first command.
-
 Rules:
 1. Output ONLY the exact CLI commands needed - no explanations, comments, or formatting.
-2. Generate ALL commands line by line in the correct sequence.
+2. Generate commands line by line in the correct sequence.
 3. Use the VLAN ID and VLAN name provided by the user.
 4. If no VLAN name is given, omit the "name" line.
 5. Do not include "enable" or privilege mode commands.
 
-Standard VLAN creation sequence (ALL 5 lines required):
+Standard VLAN creation sequence:
 configure terminal
 vlan <VLAN_ID>
  name <VLAN_NAME>
@@ -37,7 +35,7 @@ end
 write memory
 
 Example request: "Create VLAN 20 named Sales"
-Expected output (all 5 lines):
+Expected output:
 configure terminal
 vlan 20
  name Sales
@@ -45,13 +43,13 @@ end
 write memory
 
 Example request: "Create VLAN 10"
-Expected output (all 4 lines):
+Expected output:
 configure terminal
 vlan 10
 end
 write memory
 
-Output only raw commands, one per line. No markdown, no explanations. Generate the complete sequence."""
+Output only raw commands, one per line. No markdown, no explanations."""
 
 
 CISCO_IOS_VLAN_DELETE_PROMPT = """You are a Cisco IOS expert for VLAN deletion.

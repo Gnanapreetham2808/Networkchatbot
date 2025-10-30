@@ -379,7 +379,7 @@ return Response({
 ENABLE_VLAN_AUTOMATION=0  # ← Set to 1 to enable
 
 # Gemini API (used for Aruba)
-GEMINI_API_KEY=AIzaSyBOi72eJZRyZPUByAS0op0Oabk9nCWgyB0
+GEMINI_API_KEY=your-gemini-api-key-here
 ARUBA_LLM_PROVIDER=gemini
 ARUBA_LLM_MODEL=gemini-2.0-flash-exp
 
