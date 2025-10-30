@@ -151,7 +151,11 @@ def _predict_via_gemini(query: str, model: Optional[str] = None, system: Optiona
     
     # Combine system prompt and user query for Gemini
     system_content = system or _system_prompt()
-    full_prompt = f"{system_content}\n\nRequest: {query}\nReturn only one CLI command."
+    # Don't add "Return only one CLI command" if custom system prompt is provided (e.g., VLAN creation needs multiple lines)
+    if system:
+        full_prompt = f"{system_content}\n\nRequest: {query}"
+    else:
+        full_prompt = f"{system_content}\n\nRequest: {query}\nReturn only one CLI command."
     
     payload = {
         "contents": [{
@@ -159,7 +163,7 @@ def _predict_via_gemini(query: str, model: Optional[str] = None, system: Optiona
         }],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 100,
+            "maxOutputTokens": 300,  # Increased for multi-line VLAN commands
         }
     }
     
@@ -181,10 +185,14 @@ def _predict_via_gemini(query: str, model: Optional[str] = None, system: Optiona
         data = json.loads(text)
         # Gemini response structure: candidates[0].content.parts[0].text
         content = data["candidates"][0]["content"]["parts"][0]["text"]
-        result = _sanitize_cli(content)
+        # Don't sanitize (truncate to first line) if custom system prompt provided (e.g., VLAN creation needs multiple lines)
+        if system:
+            result = content.strip()
+        else:
+            result = _sanitize_cli(content)
         logger.info("Gemini prediction completed", extra={
             'query': query[:100],
-            'predicted_cli': result,
+            'predicted_cli': result[:200],  # Log preview
             'model': model,
             'duration_ms': duration_ms
         })

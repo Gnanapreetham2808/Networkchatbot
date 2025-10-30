@@ -20,11 +20,7 @@ type Device = {
   host: string;
 };
 
-const AVAILABLE_DEVICES: Device[] = [
-  { alias: 'INVIJB1C01', host: '192.168.10.1' },
-  { alias: 'UKLONB10C01', host: '192.168.30.1' },
-  { alias: 'INVIJB10A01', host: '192.168.50.3' },
-];
+// Device list is fetched from backend; keep a fallback type only
 
 export default function ChatPage() {
   const router = useRouter();
@@ -36,9 +32,39 @@ export default function ChatPage() {
   const [currentDevice, setCurrentDevice] = useState<{ alias?: string; host?: string } | null>(null);
   const [hasFirstResponse, setHasFirstResponse] = useState(false);
   const [agenticMode, setAgenticMode] = useState(false); // Toggle for Agentic Mode
+  const ENABLE_VLAN_AUTOMATION = (process.env.NEXT_PUBLIC_ENABLE_VLAN_AUTOMATION ?? '1') === '1';
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
+  const [availableDevices, setAvailableDevices] = useState<Device[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState<boolean>(false);
   const endRef = useRef<HTMLDivElement>(null);
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000/api/nlp/network-command/';
+
+  // Build robust candidates for device endpoints to tolerate different BACKEND_URL bases
+  const buildDeviceEndpointCandidates = () => {
+    const candidates: string[] = [];
+    try {
+      const u = new URL(BACKEND_URL);
+      // Normalize path with trailing slash
+      let path = u.pathname.endsWith('/') ? u.pathname : u.pathname + '/';
+      // 1) Same path base replacement
+      candidates.push(u.origin + path.replace('network-command/', 'devices/'));
+      candidates.push(u.origin + path.replace('network-command/', 'device-status/'));
+      // 2) Force /api/nlp/ root
+      const nlpRoot = '/api/nlp/';
+      candidates.push(u.origin + nlpRoot + 'devices/');
+      candidates.push(u.origin + nlpRoot + 'device-status/');
+      // 3) Plain /api/ root
+      const apiRoot = '/api/';
+      candidates.push(u.origin + apiRoot + 'devices/');
+      candidates.push(u.origin + apiRoot + 'device-status/');
+    } catch {
+      // Fallback to defaults on URL parse error
+      candidates.push('http://127.0.0.1:8000/api/nlp/devices/');
+      candidates.push('http://127.0.0.1:8000/api/nlp/device-status/');
+    }
+    // De-duplicate while preserving order
+    return Array.from(new Set(candidates));
+  };
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -66,6 +92,37 @@ export default function ChatPage() {
     }
   }, []);
 
+  // Fetch devices from backend to populate selector
+  useEffect(() => {
+    let active = true;
+    const fetchDevices = async () => {
+      setDevicesLoading(true);
+      try {
+        const endpoints = buildDeviceEndpointCandidates();
+        let loaded: Device[] | null = null;
+        for (const url of endpoints) {
+          try {
+            const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' });
+            if (!res.ok) continue;
+            const data = await res.json();
+            const raw = Array.isArray(data) ? data : (data?.devices || []);
+            const list: Device[] = raw
+              .filter((d: any) => d?.alias && (d?.host || d?.ip))
+              .map((d: any) => ({ alias: String(d.alias), host: String(d.host || d.ip) }));
+            if (list.length > 0) { loaded = list; break; }
+          } catch { /* try next */ }
+        }
+        if (active) setAvailableDevices(loaded || []);
+      } catch (e) {
+        // No-op; keep empty list
+      } finally {
+        if (active) setDevicesLoading(false);
+      }
+    };
+    fetchDevices();
+    return () => { active = false; };
+  }, [BACKEND_URL]);
+
   const formatTime = (date: Date) =>
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -89,16 +146,10 @@ export default function ChatPage() {
       // Check if message is a VLAN creation request (only in Agentic Mode)
       const vlanMatch = trimmed.match(/create vlan|add vlan|new vlan|configure vlan/i);
       
-      if (agenticMode && vlanMatch) {
-        // VLAN automation is currently disabled
-        const botText = `⚠️ Agentic Mode (VLAN Automation) is currently disabled.\n\nThis feature is under development. The system will operate in Read-Only mode for now.\n\nYou can still use show commands to query network devices.`;
-
-        const botMessage: ChatMessage = {
-          id: Date.now().toString(),
-          sender: 'bot',
-          content: botText,
-          timestamp: new Date(),
-        };
+      if (agenticMode && vlanMatch && !ENABLE_VLAN_AUTOMATION) {
+        // Only block if frontend flag disables it; otherwise let backend handle
+        const botText = `⚠️ VLAN automation disabled by frontend flag. Set NEXT_PUBLIC_ENABLE_VLAN_AUTOMATION=1 to enable.`;
+        const botMessage: ChatMessage = { id: Date.now().toString(), sender: 'bot', content: botText, timestamp: new Date() };
         setMessages(prev => [...prev, botMessage]);
         setIsLoading(false);
         return;
@@ -107,10 +158,17 @@ export default function ChatPage() {
       // Default chat flow for non-VLAN commands
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
+      const payload: any = { session_id: sessionId, query: trimmed };
+      if (currentDevice?.host) {
+        payload.device_ip = currentDevice.host;
+      }
+      if (currentDevice?.alias) {
+        payload.device_alias = currentDevice.alias;
+      }
       const res = await fetch(BACKEND_URL, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ session_id: sessionId, query: trimmed })
+        body: JSON.stringify(payload)
       });
 
       let botText = '';
@@ -235,7 +293,13 @@ export default function ChatPage() {
                   Select Target Device
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {AVAILABLE_DEVICES.map((device) => (
+                  {devicesLoading && (
+                    <div className="col-span-3 text-sm text-gray-500 dark:text-gray-400">Loading devices…</div>
+                  )}
+                  {!devicesLoading && availableDevices.length === 0 && (
+                    <div className="col-span-3 text-sm text-gray-500 dark:text-gray-400">No devices available</div>
+                  )}
+                  {availableDevices.map((device) => (
                     <button
                       key={device.alias}
                       onClick={() => {

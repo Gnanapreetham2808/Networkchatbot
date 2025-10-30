@@ -17,8 +17,12 @@ except Exception:
     paramiko = None  # fallback if not available
 
 from netops_backend.nlp_router import predict_cli, predict_cli_provider
+from netops_backend.vlan_agent.nornir_driver import deploy_vlan_to_switches
+from netops_backend.vlan_agent.nornir_driver import deploy_vlan_to_device
 from .models import Conversation, Message
 from .models import DeviceHealth, HealthAlert
+from .memory_manager import get_memory_manager
+from .intent_recognizer import recognize_intent
 import subprocess
 from functools import lru_cache
 from datetime import datetime, timedelta, timezone
@@ -153,12 +157,86 @@ class DeviceStatusAPIView(APIView):
             "cache_ttl_seconds": PING_CACHE_TTL,
         }, status=200)
 
-# Simple command safety allowlist (read-only)
-SAFE_PREFIXES = (
-    'show ', 'dir', 'display '
+class DeviceListAPIView(APIView):
+    """GET /devices/ -> raw devices from devices.json (safe subset).
+
+    Returns: { devices: [ { alias, name, host, vendor, model } ] }
+    Optional query params:
+      alias=ALIAS1,ALIAS2 (filter subset)
+    """
+    def get(self, request):  # type: ignore[override]
+        devices = get_devices() or {}
+        alias_filter = request.GET.get("alias")
+        subset = None
+        if alias_filter:
+            wanted = {a.strip().upper() for a in alias_filter.split(",") if a.strip()}
+            subset = {k:v for k,v in devices.items() if k.upper() in wanted}
+        devs = subset if subset is not None else devices
+        results = []
+        for alias, info in devs.items():
+            # do not expose sensitive fields like username/password
+            results.append({
+                "alias": alias,
+                "name": info.get("name") or alias,
+                "host": info.get("host") or info.get("ip"),
+                "vendor": info.get("vendor"),
+                "model": info.get("model") or info.get("platform"),
+            })
+        return Response({
+            "count": len(results),
+            "devices": results,
+        }, status=200)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class VLANQuickCreateAPIView(APIView):
+    """POST /vlan/create/ -> create VLAN on a single target device.
+
+    Body JSON: { vlan_id: 100, name?: "ENG", device_alias?: "INVIJB10A01" | device_ip?: "192.168.10.10" }
+    Returns: { alias, host, status, ... }
+    """
+    def post(self, request):  # type: ignore[override]
+        data = getattr(request, 'data', {}) or {}
+        vlan_id = data.get('vlan_id') or data.get('id')
+        name = data.get('name') or (f"VLAN{vlan_id}" if vlan_id else None)
+        selector = data.get('device_alias') or data.get('alias') or data.get('device_ip') or data.get('ip')
+
+        if not vlan_id:
+            return Response({"error": "vlan_id required"}, status=400)
+        try:
+            vlan_id = int(vlan_id)
+        except Exception:
+            return Response({"error": "vlan_id must be integer"}, status=400)
+        if not selector:
+            return Response({"error": "device_alias or device_ip required"}, status=400)
+        if not name:
+            name = f"VLAN{vlan_id}"
+
+        # Only allow when automation flag is on
+        if os.getenv('ENABLE_VLAN_AUTOMATION', '0') != '1':
+            return Response({"error": "VLAN automation disabled (ENABLE_VLAN_AUTOMATION)"}, status=503)
+
+        result = deploy_vlan_to_device(str(selector), vlan_id, str(name))
+        code = 200 if result.get('status') in ('created', 'skipped') else 502
+        return Response(result, status=code)
+
+# Command safety configuration
+# READ-ONLY prefixes (always allowed)
+SAFE_READ_PREFIXES = (
+    'show ', 'dir', 'display ', 'get ', 'list '
 )
+
+# CONFIGURATION prefixes (allowed only with intent recognition and approval)
+CONFIG_PREFIXES = (
+    'configure ', 'config ', 'vlan ', 'interface ', 'ip route',
+    'access-list ', 'no ', 'shutdown', 'no shutdown',
+    'switchport ', 'name ', 'description '
+)
+
+# DANGEROUS operations (always blocked unless explicitly approved)
 BLOCKED_SUBSTRINGS = (
-    ' delete', ' erase', ' write ', ' format', ' reload', ' shutdown', ' no shutdown', 'copy ', ' tftp', ' ftp ', 'scp '
+    ' delete', ' erase', ' write ', ' format', ' reload',
+    'copy ', ' tftp', ' ftp ', 'scp ', 'delete ', 'clear '
 )
 
 
@@ -202,6 +280,16 @@ class NetworkCommandAPIView(APIView):
         if conversation is None:
             conversation = Conversation.objects.create()
             session_id = str(conversation.id)
+
+        # Initialize LangChain memory manager for this conversation
+        memory_manager = get_memory_manager(str(conversation.id))
+        
+        # Load existing messages into memory if conversation already exists
+        if conversation and not memory_manager.get_memory_stats().get("message_count", 0):
+            existing_messages = conversation.messages.all()[:50]  # Load last 50 messages
+            if existing_messages.exists():
+                memory_manager.load_from_django_messages(existing_messages)
+                logger.info(f"Loaded {existing_messages.count()} existing messages into memory for session {session_id}")
 
         if not query:
             return Response({"error": "Failed to run command"}, status=400)
@@ -415,6 +503,11 @@ class NetworkCommandAPIView(APIView):
                             conversation.save(update_fields=["last_command", "updated_at"])
                         Message.objects.create(conversation=conversation, role=Message.ROLE_USER, content=query)
                         Message.objects.create(conversation=conversation, role=Message.ROLE_ASSISTANT, content=cli_command, meta="CLI_OUTPUT")
+                        
+                        # Update LangChain memory
+                        memory_manager.add_user_message(query)
+                        memory_manager.add_ai_message(f"Executed: {cli_command}")
+                    
                     return Response({
                         "output": output,
                         "device_alias": hostname,
@@ -501,10 +594,201 @@ class NetworkCommandAPIView(APIView):
         if not cli_command or cli_command.startswith("[Error]"):
             return Response({"error": "Failed to run command", "session_id": session_id}, status=500)
 
+        # EARLY VLAN INTENT (agentic) regardless of CLI classification
+        try:
+            early_intent = recognize_intent(query)
+        except Exception:
+            early_intent = None
+        if early_intent and getattr(early_intent, 'category', None) == 'vlan':
+            if os.getenv('ENABLE_VLAN_AUTOMATION', '0') == '1':
+                try:
+                    vlan_id = None
+                    vlan_name = None
+                    # Extract params from intent
+                    try:
+                        vlan_id = int(early_intent.params.get('vlan_id')) if early_intent.params.get('vlan_id') else None
+                    except Exception:
+                        vlan_id = None
+                    vlan_name = early_intent.params.get('vlan_name') or None
+                    # Fallback: parse from natural query if needed
+                    if vlan_id is None:
+                        m = re.search(r"\bvlan\s+(\d+)\b", query, re.IGNORECASE)
+                        if m:
+                            vlan_id = int(m.group(1))
+                    if vlan_id is None:
+                        return Response({
+                            "error": "Could not determine VLAN ID from request",
+                            "intent": early_intent.name,
+                            "session_id": session_id
+                        }, status=400)
+                    if not vlan_name:
+                        vlan_name = f"VLAN{vlan_id}"
+
+                    plan = {"vlan_id": vlan_id, "name": vlan_name, "scope": "global"}
+                    summary = deploy_vlan_to_switches(plan)
+
+                    if conversation:
+                        Message.objects.create(conversation=conversation, role=Message.ROLE_USER, content=query)
+                        Message.objects.create(
+                            conversation=conversation,
+                            role=Message.ROLE_ASSISTANT,
+                            content=f"VLAN {vlan_id} creation requested (name={vlan_name}). Deployment summary: {summary}",
+                            meta="VLAN_AUTOMATION"
+                        )
+                        memory_manager.add_user_message(query)
+                        memory_manager.add_ai_message(f"VLAN {vlan_id} -> {summary}")
+
+                    return Response({
+                        "result": "vlan_automation_executed",
+                        "vlan_id": vlan_id,
+                        "vlan_name": vlan_name,
+                        "deployment": summary,
+                        "agentic": os.getenv('ENABLE_AGENTIC_VLAN_CREATION', '0') == '1',
+                        "session_id": session_id
+                    }, status=200)
+                except Exception as e:
+                    logger.error(f"VLAN automation failed: {e}", exc_info=True)
+                    return Response({
+                        "error": "VLAN automation failed",
+                        "details": str(e),
+                        "session_id": session_id
+                    }, status=500)
+            else:
+                return Response({
+                    "error": "VLAN automation is disabled. Set ENABLE_VLAN_AUTOMATION=1 to enable.",
+                    "intent": early_intent.name,
+                    "description": early_intent.description,
+                    "session_id": session_id
+                }, status=503)
+
+        # Command Safety Validation (for non-VLAN or when automation disabled)
         lc = cli_command.strip().lower()
-        # Enforce read-only by default
-        if not any(lc.startswith(p) for p in SAFE_PREFIXES):
-            return Response({"error": "Command not allowed", "command": cli_command, "session_id": session_id}, status=400)
+        
+        # Check if it's a read-only command (always allowed)
+        is_read_only = any(lc.startswith(p) for p in SAFE_READ_PREFIXES)
+        
+        # Check if it's a configuration command
+        is_config_command = any(lc.startswith(p) for p in CONFIG_PREFIXES)
+        
+        # Check for dangerous operations (always blocked)
+        has_dangerous_ops = any(b in lc for b in BLOCKED_SUBSTRINGS)
+        
+        if has_dangerous_ops:
+            logger.warning(f"Blocked dangerous command: {cli_command}")
+            return Response({
+                "error": "Command contains dangerous operations and is blocked",
+                "command": cli_command,
+                "session_id": session_id
+            }, status=403)
+        
+        # Recognize intent for configuration commands
+        intent = None
+        if is_config_command and not is_read_only:
+            intent = recognize_intent(query)
+            
+            if intent:
+                logger.info(f"Detected configuration intent: {intent.name} (category: {intent.category}, confidence: {intent.confidence:.2f})")
+                
+                # VLAN Automation (Agentic) - gated by ENABLE_VLAN_AUTOMATION
+                if intent.category == 'vlan':
+                    if os.getenv('ENABLE_VLAN_AUTOMATION', '0') == '1':
+                        try:
+                            vlan_id = None
+                            vlan_name = None
+                            # Extract params from intent if present
+                            try:
+                                vlan_id = int(intent.params.get('vlan_id')) if intent.params.get('vlan_id') else None
+                            except Exception:
+                                vlan_id = None
+                            vlan_name = intent.params.get('vlan_name') or None
+                            # Fallback: attempt to parse VLAN ID from the predicted CLI
+                            if vlan_id is None:
+                                m = re.search(r"\bvlan\s+(\d+)\b", cli_command, re.IGNORECASE)
+                                if m:
+                                    vlan_id = int(m.group(1))
+                            if vlan_id is None:
+                                return Response({
+                                    "error": "Could not determine VLAN ID from request",
+                                    "intent": intent.name,
+                                    "command": cli_command,
+                                    "session_id": session_id
+                                }, status=400)
+                            if not vlan_name:
+                                vlan_name = f"VLAN{vlan_id}"
+
+                            # Kick off hierarchical deployment (Core → Access). This uses agentic prompts
+                            # under the hood when ENABLE_AGENTIC_VLAN_CREATION=1 and vendor prompts (Gemini for Aruba).
+                            plan = {"vlan_id": vlan_id, "name": vlan_name, "scope": "global"}
+                            summary = deploy_vlan_to_switches(plan)
+
+                            # Persist conversation context and memory
+                            if conversation:
+                                Message.objects.create(conversation=conversation, role=Message.ROLE_USER, content=query)
+                                Message.objects.create(
+                                    conversation=conversation,
+                                    role=Message.ROLE_ASSISTANT,
+                                    content=f"VLAN {vlan_id} creation requested (name={vlan_name}). Deployment summary: {summary}",
+                                    meta="VLAN_AUTOMATION"
+                                )
+                                memory_manager.add_user_message(query)
+                                memory_manager.add_ai_message(f"VLAN {vlan_id} -> {summary}")
+
+                            return Response({
+                                "result": "vlan_automation_executed",
+                                "vlan_id": vlan_id,
+                                "vlan_name": vlan_name,
+                                "deployment": summary,
+                                "agentic": os.getenv('ENABLE_AGENTIC_VLAN_CREATION', '0') == '1',
+                                "session_id": session_id
+                            }, status=200)
+                        except Exception as e:
+                            logger.error(f"VLAN automation failed: {e}", exc_info=True)
+                            return Response({
+                                "error": "VLAN automation failed",
+                                "details": str(e),
+                                "session_id": session_id
+                            }, status=500)
+                    else:
+                        return Response({
+                            "error": "VLAN automation is disabled. Set ENABLE_VLAN_AUTOMATION=1 to enable.",
+                            "intent": intent.name,
+                            "description": intent.description,
+                            "session_id": session_id
+                        }, status=503)
+                
+                # For other config intents, require approval in future
+                # For now, allow if intent is recognized
+                if intent.requires_approval:
+                    logger.info(f"Configuration command requires approval: {cli_command}")
+                    # In future: return approval request to frontend
+                    # For now: block config commands except VLANs
+                    return Response({
+                        "error": f"{intent.description} requires approval (feature under development)",
+                        "intent": intent.name,
+                        "category": intent.category,
+                        "params": intent.params,
+                        "requires_approval": True,
+                        "command": cli_command,
+                        "session_id": session_id
+                    }, status=403)
+            else:
+                # Configuration command without recognized intent - block for safety
+                logger.warning(f"Unrecognized configuration command: {cli_command}")
+                return Response({
+                    "error": "Configuration command not recognized. Only read-only commands are allowed without intent recognition.",
+                    "command": cli_command,
+                    "session_id": session_id
+                }, status=403)
+        
+        # Allow read-only commands
+        if not is_read_only and not is_config_command:
+            return Response({
+                "error": "Command not allowed (not in allowed prefixes)",
+                "command": cli_command,
+                "session_id": session_id
+            }, status=400)
+        
+        # Proceed with execution for read-only commands
         if any(b in lc for b in BLOCKED_SUBSTRINGS):
             return Response({"error": "Command blocked for safety", "command": cli_command, "session_id": session_id}, status=400)
 
@@ -750,6 +1034,11 @@ class NetworkCommandAPIView(APIView):
                                 conversation.save(update_fields=["last_command", "updated_at"])
                             Message.objects.create(conversation=conversation, role=Message.ROLE_USER, content=query)
                             Message.objects.create(conversation=conversation, role=Message.ROLE_ASSISTANT, content=cli_command, meta="CLI_OUTPUT")
+                            
+                            # Update LangChain memory
+                            memory_manager.add_user_message(query)
+                            memory_manager.add_ai_message(f"Executed: {cli_command}")
+                        
                         resp_payload = {
                             "output": output,
                             "device_alias": hostname,
@@ -813,6 +1102,10 @@ class NetworkCommandAPIView(APIView):
                 conversation.save(update_fields=["last_command", "updated_at"])
             Message.objects.create(conversation=conversation, role=Message.ROLE_USER, content=query)
             Message.objects.create(conversation=conversation, role=Message.ROLE_ASSISTANT, content=cli_command, meta="CLI_OUTPUT")
+            
+            # Update LangChain memory
+            memory_manager.add_user_message(query)
+            memory_manager.add_ai_message(f"Executed: {cli_command}")
 
         # Flexible response modes
         # Default: minimal JSON with raw output only (legacy behavior the user requested)
@@ -1373,6 +1666,81 @@ class DeviceHealthAPIView(APIView):
         }, status=200)
 
 
+class MemoryStatsAPIView(APIView):
+    """
+    Get memory statistics for a conversation session.
+    
+    GET /api/memory/stats/?session_id=abc-123-def-456
+    
+    Returns:
+        {
+            "enabled": true,
+            "memory_type": "window",
+            "message_count": 8,
+            "window_size": 10,
+            "conversation_id": "abc-123-def-456",
+            "db_message_count": 15,
+            "last_messages": [
+                {"role": "user", "content": "Show interfaces"},
+                {"role": "assistant", "content": "Executed: show interfaces"}
+            ]
+        }
+    """
+    
+    def get(self, request):
+        session_id = request.query_params.get('session_id')
+        
+        if not session_id:
+            return Response({"error": "session_id required"}, status=400)
+        
+        try:
+            conversation = Conversation.objects.get(id=session_id)
+        except Conversation.DoesNotExist:
+            return Response({"error": "Session not found"}, status=404)
+        
+        # Get memory stats
+        memory_mgr = get_memory_manager(session_id)
+        stats = memory_mgr.get_memory_stats()
+        
+        # Add DB message count
+        db_count = conversation.messages.count()
+        stats['db_message_count'] = db_count
+        
+        # Add last N messages
+        last_n = int(request.query_params.get('last', 5))
+        stats['last_messages'] = memory_mgr.get_last_n_messages(last_n)
+        
+        # Add conversation info
+        stats['device_alias'] = conversation.device_alias
+        stats['device_host'] = conversation.device_host
+        stats['last_command'] = conversation.last_command
+        stats['updated_at'] = conversation.updated_at
+        
+        return Response(stats, status=200)
+    
+    def delete(self, request):
+        """Clear memory for a specific session."""
+        session_id = request.query_params.get('session_id')
+        
+        if not session_id:
+            return Response({"error": "session_id required"}, status=400)
+        
+        try:
+            conversation = Conversation.objects.get(id=session_id)
+        except Conversation.DoesNotExist:
+            return Response({"error": "Session not found"}, status=404)
+        
+        # Clear memory
+        memory_mgr = get_memory_manager(session_id)
+        memory_mgr.clear()
+        
+        return Response({
+            "message": "Memory cleared",
+            "session_id": session_id
+        }, status=200)
+
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class HealthzAPIView(APIView):
     """Lightweight health summary for dashboards and probes.
@@ -1400,8 +1768,21 @@ class HealthzAPIView(APIView):
         for a in active.values('category'):
             c = a['category']
             cat_counts[c] = cat_counts.get(c, 0) + 1
-        return Response({
+        payload = {
             'window_minutes': window_min,
             'last_samples': last_by_alias,
             'active_alerts_by_category': cat_counts,
-        }, status=200)
+        }
+        try:
+            include_raw = getattr(request, 'query_params', {}).get('include', '')
+            includes = {s.strip().lower() for s in include_raw.split(',') if s.strip()}
+        except Exception:
+            includes = set()
+        if 'flags' in includes:
+            payload['feature_flags'] = {
+                'ENABLE_VLAN_AUTOMATION': os.getenv('ENABLE_VLAN_AUTOMATION', '0') == '1',
+                'ENABLE_AGENTIC_VLAN_CREATION': os.getenv('ENABLE_AGENTIC_VLAN_CREATION', '0') == '1',
+                'ARUBA_LLM_PROVIDER': os.getenv('ARUBA_LLM_PROVIDER', 'gemini'),
+                'ARUBA_LLM_MODEL': os.getenv('ARUBA_LLM_MODEL', 'gemini-2.0-flash-exp'),
+            }
+        return Response(payload, status=200)
