@@ -2010,3 +2010,63 @@ class DeviceManagementAPIView(APIView):
                 "status": "error",
                 "error": str(e)
             }, status=500)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class BackupDownloadAPIView(APIView):
+    """
+    Download backup files.
+    
+    GET /api/nlp/backup/download/<filename> - Download JSON or TXT backup file
+    """
+    
+    def get(self, request, filename):
+        """Download a backup file"""
+        try:
+            from pathlib import Path
+            from django.http import FileResponse, Http404
+            import os
+            
+            # Determine file type and directory
+            if filename.endswith('.json'):
+                backup_dir = Path(__file__).parent.parent.parent / "backups" / "json"
+                content_type = 'application/json'
+            elif filename.endswith('.txt'):
+                backup_dir = Path(__file__).parent.parent.parent / "backups" / "txt"
+                content_type = 'text/plain'
+            else:
+                return Response({
+                    "status": "error",
+                    "error": "Invalid file type. Only .json and .txt files are supported"
+                }, status=400)
+            
+            file_path = backup_dir / filename
+            
+            # Security check - ensure file exists and is within backup directory
+            if not file_path.exists() or not file_path.is_file():
+                raise Http404("Backup file not found")
+            
+            # Ensure the resolved path is still within the backup directory (prevent directory traversal)
+            if not str(file_path.resolve()).startswith(str(backup_dir.resolve())):
+                raise Http404("Invalid file path")
+            
+            # Return file as download
+            response = FileResponse(
+                open(file_path, 'rb'),
+                content_type=content_type,
+                as_attachment=True,
+                filename=filename
+            )
+            return response
+            
+        except Http404:
+            return Response({
+                "status": "error",
+                "error": "Backup file not found"
+            }, status=404)
+        except Exception as e:
+            logger.error(f"Failed to download backup: {e}", exc_info=True)
+            return Response({
+                "status": "error",
+                "error": str(e)
+            }, status=500)

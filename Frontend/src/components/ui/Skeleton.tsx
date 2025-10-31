@@ -1,20 +1,15 @@
-import React from 'react';
-import clsx from 'clsx';
+import { cn } from "@/lib/utils"
 
-interface SkeletonProps extends React.HTMLAttributes<HTMLDivElement> {
-  pulse?: boolean;
-}
-
-export function Skeleton({ className, pulse=true, ...rest }: SkeletonProps) {
-  return <div className={clsx('bg-gray-200/70 dark:bg-gray-700/60 rounded-md', pulse && 'animate-pulse', className)} {...rest} />;
-}
-
-export function SkeletonText({ lines=3, className }: { lines?: number; className?: string }) {
+function Skeleton({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={clsx('space-y-2', className)}>
-      {Array.from({ length: lines }).map((_,i)=>(
-        <Skeleton key={i} className="h-3 w-full" />
-      ))}
-    </div>
-  );
+    <div
+      className={cn("animate-pulse rounded-md bg-primary/10", className)}
+      {...props}
+    />
+  )
 }
+
+export { Skeleton }

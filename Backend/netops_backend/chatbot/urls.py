@@ -12,6 +12,7 @@ from .views import (
     DeviceBackupAPIView,
     BackupDetailsAPIView,
     DeviceManagementAPIView,
+    BackupDownloadAPIView,
 )
 
 urlpatterns = [
@@ -26,6 +27,7 @@ urlpatterns = [
     path("memory/stats/", MemoryStatsAPIView.as_view(), name="memory-stats"),
     # Device Backup & Management
     path("backup/", DeviceBackupAPIView.as_view(), name="device-backup"),
+    path("backup/download/<str:filename>", BackupDownloadAPIView.as_view(), name="backup-download"),
     path("backup/<str:backup_file>/", BackupDetailsAPIView.as_view(), name="backup-details"),
     path("device-management/", DeviceManagementAPIView.as_view(), name="device-management"),
 ]

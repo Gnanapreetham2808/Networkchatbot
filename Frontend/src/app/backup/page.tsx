@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Download, RefreshCw, Database, Check, X, Clock, HardDrive } from "lucide-react";
+import { Download, RefreshCw, Database, Check, X, Clock, Network } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -149,52 +149,69 @@ export default function BackupPage() {
             Backup device configurations to JSON and TXT formats
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex gap-4 items-end">
-            <div className="flex-1">
+        <CardContent className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-end">
+            <div className="w-full">
               <label className="text-sm font-medium mb-2 block">Select Device</label>
               <Select value={selectedDevice} onValueChange={handleDeviceChange}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full h-11 bg-white dark:bg-gray-800 border-2">
                   <SelectValue placeholder="Select a device" />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Devices</SelectItem>
+                <SelectContent className="max-h-96 bg-white dark:bg-gray-800 border-2 shadow-lg">
+                  <SelectItem value="all" className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700">
+                    📦 All Devices ({devices.length} devices)
+                  </SelectItem>
                   {devices.map((device) => (
-                    <SelectItem key={device.alias} value={device.alias}>
-                      {device.alias} ({device.host})
+                    <SelectItem key={device.alias} value={device.alias} className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700">
+                      💾 {device.alias} - {device.host}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             
-            <Button
-              onClick={() => startBackup(selectedDevice === "all" ? undefined : selectedDevice)}
-              disabled={backupInProgress}
-              className="gap-2"
-            >
-              {backupInProgress ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  Backing up...
-                </>
-              ) : (
-                <>
-                  <Database className="h-4 w-4" />
-                  Create Backup
-                </>
-              )}
-            </Button>
-            
-            <Button
-              variant="outline"
-              onClick={() => loadBackups(selectedDevice === "all" ? undefined : selectedDevice)}
-              disabled={loading}
-              className="gap-2"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                onClick={() => startBackup(selectedDevice === "all" ? undefined : selectedDevice)}
+                disabled={backupInProgress}
+                className="gap-2"
+                size="lg"
+              >
+                {backupInProgress ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Backing up...
+                  </>
+                ) : (
+                  <>
+                    <Database className="h-4 w-4" />
+                    Create Backup
+                  </>
+                )}
+              </Button>
+              
+              <Button
+                variant="outline"
+                onClick={() => loadBackups(selectedDevice === "all" ? undefined : selectedDevice)}
+                disabled={loading}
+                className="gap-2"
+                size="lg"
+              >
+                <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          {/* Current Selection Indicator */}
+          <div className="p-4 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <div className="flex items-center gap-2">
+              <Network className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              <span className="text-sm font-medium text-muted-foreground">Currently viewing:</span>
+              <span className="text-base font-bold text-blue-700 dark:text-blue-300">
+                {selectedDevice === "all" ? `All Devices (${devices.length})` : selectedDevice}
+              </span>
+            </div>
           </div>
 
           {/* Backup Summary */}
@@ -240,7 +257,7 @@ export default function BackupPage() {
             </div>
           ) : backups.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
-              <HardDrive className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <Network className="h-12 w-12 mx-auto mb-4 opacity-50" />
               <p>No backups found</p>
               <p className="text-sm mt-1">Create your first backup to get started</p>
             </div>
