@@ -11,9 +11,11 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/', label: 'Home' },
   { href: '/chat', label: 'Chat' },
   { href: '/vlan-manager', label: 'VLAN Manager' },
+  { href: '/backup', label: 'Backups' },
+  { href: '/device-management', label: 'Devices' },
   { href: '/admin/logs', label: 'Logs', admin: true },
   { href: '/admin/dashboard', label: 'Dashboard', admin: true },
-  { href: '/admin/devices', label: 'Devices', admin: true },
+  { href: '/admin/devices', label: 'Admin Devices', admin: true },
   { href: '/admin/users', label: 'Users', admin: true },
   { href: '/admin/settings', label: 'Settings', admin: true }
 ];

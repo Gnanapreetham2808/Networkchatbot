@@ -1786,3 +1786,227 @@ class HealthzAPIView(APIView):
                 'ARUBA_LLM_MODEL': os.getenv('ARUBA_LLM_MODEL', 'gemini-2.0-flash-exp'),
             }
         return Response(payload, status=200)
+
+
+# ================================ DEVICE BACKUP ENDPOINTS ================================
+
+from .device_backup_manager import DeviceBackupManager
+
+@method_decorator(csrf_exempt, name="dispatch")
+class DeviceBackupAPIView(APIView):
+    """
+    Device configuration backup endpoints.
+    
+    GET /api/nlp/backup/ - List all backups or filter by device
+    POST /api/nlp/backup/ - Create backup for single device or all devices
+    """
+    
+    def get(self, request):
+        """List available backups"""
+        try:
+            device_alias = request.query_params.get('device')
+            manager = DeviceBackupManager()
+            backups = manager.list_backups(device_alias=device_alias)
+            
+            return Response({
+                "status": "success",
+                "count": len(backups),
+                "backups": backups
+            }, status=200)
+            
+        except Exception as e:
+            logger.error(f"Failed to list backups: {e}", exc_info=True)
+            return Response({
+                "status": "error",
+                "error": str(e)
+            }, status=500)
+    
+    def post(self, request):
+        """Create device backup(s)"""
+        try:
+            device_alias = request.data.get('device')
+            backup_all = request.data.get('backup_all', False)
+            
+            manager = DeviceBackupManager()
+            
+            if backup_all:
+                # Backup all devices
+                result = manager.backup_all_devices()
+                return Response({
+                    "status": "success",
+                    "message": f"Backup completed for {result['total_devices']} devices",
+                    "summary": {
+                        "successful": len(result['successful']),
+                        "failed": len(result['failed']),
+                        "successful_devices": result['successful'],
+                        "failed_devices": result['failed']
+                    },
+                    "details": result['backups']
+                }, status=200)
+            
+            elif device_alias:
+                # Backup single device
+                result = manager.backup_single_device(device_alias)
+                
+                if result['status'] == 'success':
+                    return Response({
+                        "status": "success",
+                        "message": f"Backup completed for {device_alias}",
+                        "backup": result
+                    }, status=200)
+                else:
+                    return Response({
+                        "status": "error",
+                        "message": f"Backup failed for {device_alias}",
+                        "error": result.get('error'),
+                        "backup": result
+                    }, status=500)
+            
+            else:
+                return Response({
+                    "status": "error",
+                    "error": "Please specify 'device' alias or set 'backup_all' to true"
+                }, status=400)
+                
+        except Exception as e:
+            logger.error(f"Backup operation failed: {e}", exc_info=True)
+            return Response({
+                "status": "error",
+                "error": str(e)
+            }, status=500)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class BackupDetailsAPIView(APIView):
+    """
+    Get detailed backup data.
+    
+    GET /api/nlp/backup/<backup_id>/ - Get specific backup details
+    """
+    
+    def get(self, request, backup_file):
+        """Retrieve backup details"""
+        try:
+            manager = DeviceBackupManager()
+            
+            # Construct full path if only filename provided
+            from pathlib import Path
+            if not Path(backup_file).is_absolute():
+                backup_file = str(manager.BACKUP_JSON_DIR / backup_file)
+            
+            backup_data = manager.get_backup_details(backup_file)
+            
+            if backup_data:
+                return Response({
+                    "status": "success",
+                    "backup": backup_data
+                }, status=200)
+            else:
+                return Response({
+                    "status": "error",
+                    "error": "Backup not found"
+                }, status=404)
+                
+        except Exception as e:
+            logger.error(f"Failed to retrieve backup: {e}", exc_info=True)
+            return Response({
+                "status": "error",
+                "error": str(e)
+            }, status=500)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class DeviceManagementAPIView(APIView):
+    """
+    Device management endpoints - Add/Update/Delete devices.
+    
+    GET /api/nlp/device-management/ - List all devices
+    POST /api/nlp/device-management/ - Add new device
+    PUT /api/nlp/device-management/<alias>/ - Update device
+    DELETE /api/nlp/device-management/<alias>/ - Delete device
+    """
+    
+    def get(self, request):
+        """List all devices from inventory"""
+        try:
+            devices = get_devices()
+            return Response({
+                "status": "success",
+                "count": len(devices),
+                "devices": devices
+            }, status=200)
+        except Exception as e:
+            logger.error(f"Failed to list devices: {e}", exc_info=True)
+            return Response({
+                "status": "error",
+                "error": str(e)
+            }, status=500)
+    
+    def post(self, request):
+        """Add new device to inventory"""
+        try:
+            import json
+            from pathlib import Path
+            
+            # Required fields
+            alias = request.data.get('alias')
+            host = request.data.get('host')
+            username = request.data.get('username')
+            password = request.data.get('password')
+            device_type = request.data.get('device_type', 'cisco_ios')
+            
+            # Optional fields
+            vendor = request.data.get('vendor', 'cisco')
+            model = request.data.get('model', '')
+            location = request.data.get('location', '')
+            role = request.data.get('role', 'access')
+            
+            if not all([alias, host, username, password]):
+                return Response({
+                    "status": "error",
+                    "error": "Missing required fields: alias, host, username, password"
+                }, status=400)
+            
+            # Load existing devices
+            devices_file = Path(__file__).parent.parent.parent / "Devices" / "devices.json"
+            with open(devices_file, 'r') as f:
+                devices = json.load(f)
+            
+            # Check if alias already exists
+            if alias in devices:
+                return Response({
+                    "status": "error",
+                    "error": f"Device with alias '{alias}' already exists"
+                }, status=400)
+            
+            # Add new device
+            devices[alias] = {
+                "alias": alias,
+                "host": host,
+                "username": username,
+                "password": password,
+                "device_type": device_type,
+                "vendor": vendor,
+                "model": model,
+                "location": location,
+                "role": role
+            }
+            
+            # Save updated devices
+            with open(devices_file, 'w') as f:
+                json.dump(devices, f, indent=2)
+            
+            logger.info(f"Added new device: {alias} ({host})")
+            
+            return Response({
+                "status": "success",
+                "message": f"Device '{alias}' added successfully",
+                "device": devices[alias]
+            }, status=201)
+            
+        except Exception as e:
+            logger.error(f"Failed to add device: {e}", exc_info=True)
+            return Response({
+                "status": "error",
+                "error": str(e)
+            }, status=500)

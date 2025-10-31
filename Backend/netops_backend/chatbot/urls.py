@@ -9,6 +9,9 @@ from .views import (
     MemoryStatsAPIView,
     DeviceListAPIView,
     VLANQuickCreateAPIView,
+    DeviceBackupAPIView,
+    BackupDetailsAPIView,
+    DeviceManagementAPIView,
 )
 
 urlpatterns = [
@@ -21,4 +24,8 @@ urlpatterns = [
     path("vlan/create/", VLANQuickCreateAPIView.as_view(), name="vlan-quick-create"),
     path("healthz/", HealthzAPIView.as_view(), name="healthz"),
     path("memory/stats/", MemoryStatsAPIView.as_view(), name="memory-stats"),
+    # Device Backup & Management
+    path("backup/", DeviceBackupAPIView.as_view(), name="device-backup"),
+    path("backup/<str:backup_file>/", BackupDetailsAPIView.as_view(), name="backup-details"),
+    path("device-management/", DeviceManagementAPIView.as_view(), name="device-management"),
 ]
